@@ -42,6 +42,8 @@ export async function createContainer(
 
   await ensureImagePulled(IMAGE);
 
+  const memoryBytes = node.memory_mb * 1024 * 1024;
+
   const container = await docker.createContainer({
     name: containerName,
     Image: IMAGE,
@@ -56,7 +58,13 @@ export async function createContainer(
     HostConfig: {
       Runtime: "nvidia",
       ShmSize: parseShmSize(node.shm_size),
-      Memory: node.memory_mb * 1024 * 1024,
+      // SYS_ADMIN is required by OBS's browser-source plugin, which ships a
+      // setuid-root chrome-sandbox binary (standard Chromium sandboxing).
+      CapAdd: ["SYS_ADMIN"],
+      // Pin swap to the memory limit so a container can't exceed it by swapping.
+      Memory: memoryBytes,
+      MemoryReservation: memoryBytes,
+      MemorySwap: memoryBytes,
       NanoCpus: Math.round(node.cpu_quota * 1_000_000_000),
       Binds: [
         `/data/obs-configs/${instanceId}/obs-studio:/data/obs-configs/${instanceId}/obs-studio`,

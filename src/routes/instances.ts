@@ -22,6 +22,7 @@ import {
   stopContainer,
 } from "../lib/docker";
 import { NODE_ID } from "../lib/node";
+import { MessageRateLimiter } from "../lib/rate-limit";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -35,11 +36,17 @@ instances.use("*", authMiddleware);
 // Bridges a browser websocket connection to an instance container's internal
 // noVNC/obs-websocket port over the shared `obs-net` Docker network. Instance
 // containers publish no host ports, so this proxy is the only path in.
-function proxyRoute(port: number) {
+//
+// messagesPerWindow/windowMs bound how fast one client can push input into a
+// container (mirrors Wings' WS throttle). noVNC gets a much higher ceiling
+// than obsws since mouse/keyboard streams are naturally high-frequency,
+// unlike sparse OBS control commands.
+function proxyRoute(port: number, messagesPerWindow: number, windowMs = 200) {
   return upgradeWebSocket(async (c) => {
     const userId = c.get("userId") as string;
     const id = c.req.param("id") as string;
     const instance = await getInstanceById(id, userId);
+    const limiter = new MessageRateLimiter(messagesPerWindow, windowMs);
 
     let upstream: WebSocket | null = null;
     let queued: (string | ArrayBufferLike)[] = [];
@@ -62,6 +69,8 @@ function proxyRoute(port: number) {
         upstream.onerror = () => ws.close();
       },
       onMessage(event, _ws) {
+        if (!limiter.allow()) return;
+
         const data = event.data as string | ArrayBufferLike;
         if (upstream && upstream.readyState === WebSocket.OPEN) {
           upstream.send(data);
@@ -76,8 +85,8 @@ function proxyRoute(port: number) {
   });
 }
 
-instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL));
-instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL));
+instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200));
+instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10));
 
 instances.get("/", async (c) => {
   const userId = c.get("userId") as string;

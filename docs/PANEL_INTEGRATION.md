@@ -73,6 +73,29 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`) and
    brings the stack up.
 
+## Target architecture: nodes hold no real state
+
+Pterodactyl Wings' core design principle is worth adopting wholesale here:
+the node agent holds no relational state of its own and never touches the
+Panel's database directly — it only talks to the Panel over a REST API, and
+rebuilds an in-memory view of "its" data at boot. obs-instance-manager
+currently violates this (see below) by calling Supabase directly with the
+service-role key. That's an acceptable shortcut for a single trusted node,
+but it's the thing to fix before this scales past a handful of nodes:
+replace `src/lib/supabase.ts`'s direct Supabase calls with calls to
+panel-owned, node-scoped endpoints instead.
+
+One concrete piece of that worth building early: a **deauthorize push**.
+Wings had a real vulnerability (CVE-2025-68954) where revoking a user's
+access didn't close their already-open sessions. The fix was a Panel→Wings
+`POST /api/deauthorize-user` call that force-closes that user's live
+connections immediately. We have the same exposure: a user's `/instances/:id/novnc`
+or `/instances/:id/obsws` websocket stays open until their Supabase JWT
+expires, even if their access is revoked in the meantime. The node-side fix
+is straightforward once there's a reason to add an authenticated
+node-control endpoint — track open proxy connections by `userId` in memory
+and expose a way to force-close them.
+
 ## Known trade-off: every node gets the global service-role key
 
 Step 4 hands the node the *same* Supabase service-role key every other node

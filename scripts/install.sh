@@ -37,6 +37,21 @@ log()  { echo "[install] $*"; }
 warn() { echo "[install] WARNING: $*" >&2; }
 die()  { echo "[install] ERROR: $*" >&2; exit 1; }
 
+# Retries a curl call with exponential backoff (1s, 2s, 4s, ... up to 10 tries),
+# the same resilience Wings applies to its own outbound panel calls so a
+# transient network blip during linking doesn't fail the whole install.
+curl_with_backoff() {
+  local attempt=1 max_attempts=10 delay=1
+  while true; do
+    if curl "$@"; then return 0; fi
+    if [ "$attempt" -ge "$max_attempts" ]; then return 1; fi
+    warn "Request failed (attempt $attempt/$max_attempts), retrying in ${delay}s..."
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
 for arg in "$@"; do
   case "$arg" in
     --panel-url=*) PANEL_URL="${arg#*=}" ;;
@@ -149,10 +164,10 @@ if [ -n "$PANEL_URL" ] && [ -n "$TOKEN" ]; then
   RAM_TOTAL_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   CPU_CORES="$(nproc)"
 
-  CLAIM_RESPONSE="$(curl -fsSL -X POST "$PANEL_URL/api/nodes/claim" \
+  CLAIM_RESPONSE="$(curl_with_backoff -fsSL -X POST "$PANEL_URL/api/nodes/claim" \
     -H "Content-Type: application/json" \
     -d "{\"token\":\"$TOKEN\",\"gpu_bus_id\":\"$GPU_BUS_ID\",\"vram_total_mb\":$VRAM_TOTAL_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"cpu_cores\":$CPU_CORES}")" \
-    || die "Node claim request to $PANEL_URL failed. Check the URL/token and that the panel's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
+    || die "Node claim request to $PANEL_URL failed after retries. Check the URL/token and that the panel's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
 
   python3 - "$ENV_FILE" "$CLAIM_RESPONSE" <<'PY'
 import json, sys
