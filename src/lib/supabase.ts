@@ -32,6 +32,16 @@ export async function listUserInstances(userId: string): Promise<Instance[]> {
   return data as Instance[];
 }
 
+export async function listNodeInstances(nodeId: string): Promise<Instance[]> {
+  const { data, error } = await supabase
+    .from("obs_instances")
+    .select("*")
+    .eq("node_id", nodeId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data as Instance[];
+}
+
 export async function getInstanceById(
   instanceId: string,
   userId: string

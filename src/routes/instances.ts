@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { createBunWebSocket } from "hono/bun";
 import { authMiddleware } from "../middleware/auth";
 import {
   countActiveInstances,
@@ -23,11 +22,10 @@ import {
 } from "../lib/docker";
 import { NODE_ID } from "../lib/node";
 import { MessageRateLimiter } from "../lib/rate-limit";
+import { upgradeWebSocket } from "../lib/ws";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
-
-export const { upgradeWebSocket, websocket } = createBunWebSocket();
 
 const instances = new Hono<{ Variables: AppVariables }>();
 
