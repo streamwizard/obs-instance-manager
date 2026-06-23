@@ -1,13 +1,18 @@
 import Docker from "dockerode";
-import type { AllocatedPorts, Node } from "../types";
+import type { Node } from "../types";
 
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 
 const IMAGE = "ghcr.io/streamwizard/obs-cloud-container:latest";
 
-const VNC_PORT_INTERNAL = "5900";
-const NOVNC_PORT_INTERNAL = "6080";
-const OBS_WS_PORT_INTERNAL = "4455";
+// Shared user-defined network joined by both the api container and every
+// instance container, so the api can reach instances by container name over
+// Docker's embedded DNS instead of publishing per-instance ports to the host.
+const NETWORK_NAME = process.env.OBS_NETWORK || "obs-net";
+
+export const VNC_PORT_INTERNAL = 5900;
+export const NOVNC_PORT_INTERNAL = 6080;
+export const OBS_WS_PORT_INTERNAL = 4455;
 
 export { docker };
 
@@ -27,14 +32,13 @@ export interface CreateContainerOptions {
   instanceId: string;
   containerName: string;
   node: Node;
-  ports: AllocatedPorts;
   resolution: string;
 }
 
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
-  const { instanceId, containerName, node, ports, resolution } = opts;
+  const { instanceId, containerName, node, resolution } = opts;
 
   await ensureImagePulled(IMAGE);
 
@@ -44,9 +48,9 @@ export async function createContainer(
     Env: [
       `RESOLUTION=${resolution}`,
       `GPU_BUSID=${node.gpu_bus_id}`,
-      `VNC_PORT=5900`,
-      `NOVNC_PORT=6080`,
-      `OBS_WEBSOCKET_PORT=4455`,
+      `VNC_PORT=${VNC_PORT_INTERNAL}`,
+      `NOVNC_PORT=${NOVNC_PORT_INTERNAL}`,
+      `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
       `DISPLAY_NUM=:0`,
     ],
     HostConfig: {
@@ -54,11 +58,6 @@ export async function createContainer(
       ShmSize: parseShmSize(node.shm_size),
       Memory: node.memory_mb * 1024 * 1024,
       NanoCpus: Math.round(node.cpu_quota * 1_000_000_000),
-      PortBindings: {
-        [`${VNC_PORT_INTERNAL}/tcp`]: [{ HostPort: String(ports.vnc_port) }],
-        [`${NOVNC_PORT_INTERNAL}/tcp`]: [{ HostPort: String(ports.novnc_port) }],
-        [`${OBS_WS_PORT_INTERNAL}/tcp`]: [{ HostPort: String(ports.obs_ws_port) }],
-      },
       Binds: [
         `/data/obs-configs/${instanceId}/obs-studio:/data/obs-configs/${instanceId}/obs-studio`,
       ],
@@ -75,9 +74,20 @@ export async function createContainer(
       [`${NOVNC_PORT_INTERNAL}/tcp`]: {},
       [`${OBS_WS_PORT_INTERNAL}/tcp`]: {},
     },
+    NetworkingConfig: {
+      EndpointsConfig: {
+        [NETWORK_NAME]: {},
+      },
+    },
   });
 
   return container.id;
+}
+
+// Address used by the api container to reach an instance's internal ports
+// over the shared `obs-net` network (instances are never published to the host).
+export function instanceTarget(containerName: string, port: number): string {
+  return `${containerName}:${port}`;
 }
 
 function parseShmSize(shmSize: string): number {

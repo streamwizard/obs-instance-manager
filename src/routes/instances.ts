@@ -1,31 +1,83 @@
 import { Hono } from "hono";
+import { createBunWebSocket } from "hono/bun";
 import { authMiddleware } from "../middleware/auth";
 import {
   countActiveInstances,
   deleteInstance,
-  getDefaultNode,
   getInstanceById,
-  getUsedPorts,
+  getNode,
   insertInstance,
   listUserInstances,
   sumAllocatedVram,
   updateInstance,
 } from "../lib/supabase";
-import { allocatePorts } from "../lib/ports";
 import {
   createContainer,
   getContainerStatus,
+  instanceTarget,
+  NOVNC_PORT_INTERNAL,
+  OBS_WS_PORT_INTERNAL,
   removeContainer,
   startContainer,
   stopContainer,
 } from "../lib/docker";
+import { NODE_ID } from "../lib/node";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
 
+export const { upgradeWebSocket, websocket } = createBunWebSocket();
+
 const instances = new Hono<{ Variables: AppVariables }>();
 
 instances.use("*", authMiddleware);
+
+// Bridges a browser websocket connection to an instance container's internal
+// noVNC/obs-websocket port over the shared `obs-net` Docker network. Instance
+// containers publish no host ports, so this proxy is the only path in.
+function proxyRoute(port: number) {
+  return upgradeWebSocket(async (c) => {
+    const userId = c.get("userId") as string;
+    const id = c.req.param("id") as string;
+    const instance = await getInstanceById(id, userId);
+
+    let upstream: WebSocket | null = null;
+    let queued: (string | ArrayBufferLike)[] = [];
+
+    return {
+      onOpen(_event, ws) {
+        if (!instance) {
+          ws.close(4404, "Instance not found");
+          return;
+        }
+
+        upstream = new WebSocket(`ws://${instanceTarget(instance.container_name, port)}`);
+        upstream.binaryType = "arraybuffer";
+        upstream.onopen = () => {
+          for (const message of queued) upstream?.send(message);
+          queued = [];
+        };
+        upstream.onmessage = (event) => ws.send(event.data);
+        upstream.onclose = () => ws.close();
+        upstream.onerror = () => ws.close();
+      },
+      onMessage(event, _ws) {
+        const data = event.data as string | ArrayBufferLike;
+        if (upstream && upstream.readyState === WebSocket.OPEN) {
+          upstream.send(data);
+        } else {
+          queued.push(data);
+        }
+      },
+      onClose() {
+        upstream?.close();
+      },
+    };
+  });
+}
+
+instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL));
+instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL));
 
 instances.get("/", async (c) => {
   const userId = c.get("userId") as string;
@@ -62,7 +114,7 @@ instances.post("/", async (c) => {
   const body = await c.req.json<CreateInstanceBody>().catch(() => ({} as CreateInstanceBody));
   const resolution = body.resolution ?? DEFAULT_RESOLUTION;
 
-  const node = await getDefaultNode();
+  const node = await getNode(NODE_ID);
 
   const activeCount = await countActiveInstances(node.id);
   if (activeCount >= node.max_instances) {
@@ -74,15 +126,6 @@ instances.post("/", async (c) => {
     return c.json({ error: "Allocating this instance would exceed total_vram_mb" }, 409);
   }
 
-  const usedPorts = await getUsedPorts(node.id);
-
-  let ports;
-  try {
-    ports = allocatePorts(node, usedPorts);
-  } catch (err) {
-    return c.json({ error: (err as Error).message }, 409);
-  }
-
   const instanceId = crypto.randomUUID();
   const containerName = `obs-instance-${instanceId}`;
 
@@ -92,9 +135,6 @@ instances.post("/", async (c) => {
     node_id: node.id,
     container_id: null,
     container_name: containerName,
-    vnc_port: ports.vnc_port,
-    novnc_port: ports.novnc_port,
-    obs_ws_port: ports.obs_ws_port,
     resolution,
     status: "creating",
     vram_allocated_mb: node.vram_mb,
@@ -105,7 +145,6 @@ instances.post("/", async (c) => {
       instanceId,
       containerName,
       node,
-      ports,
       resolution,
     });
     await startContainer(containerId);

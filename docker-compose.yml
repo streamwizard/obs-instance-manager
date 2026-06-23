@@ -11,11 +11,13 @@ services:
       - CADVISOR_URL=http://cadvisor:8080
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=utility,compute
+      - OBS_NETWORK=obs-net
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     gpus: all
     networks:
       - internal
+      - obs-net
     depends_on:
       - cadvisor
 
@@ -37,4 +39,7 @@ services:
 
 networks:
   internal:
+    driver: bridge
+  obs-net:
+    name: obs-net
     driver: bridge

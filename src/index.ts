@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import instances from "./routes/instances";
+import instances, { websocket } from "./routes/instances";
 import metrics from "./routes/metrics";
 import type { AppVariables } from "./types";
 
@@ -15,6 +15,7 @@ const port = Number(process.env.PORT) || 3000;
 export default {
   port,
   fetch: app.fetch,
+  websocket,
 };
 
 console.log(`OBS Panel API listening on port ${port}`);
