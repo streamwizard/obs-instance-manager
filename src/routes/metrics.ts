@@ -1,0 +1,53 @@
+import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
+import { authMiddleware } from "../middleware/auth";
+import { listUserInstances } from "../lib/supabase";
+import { getAllMetrics } from "../lib/metrics";
+import type { AppVariables } from "../types";
+
+const STREAM_INTERVAL_MS = 3000;
+
+const metrics = new Hono<{ Variables: AppVariables }>();
+
+metrics.use("*", authMiddleware);
+
+metrics.get("/snapshot", async (c) => {
+  const userId = c.get("userId");
+  const userInstances = await listUserInstances(userId);
+  const runningInstances = userInstances.filter((i) => i.status === "running");
+
+  const payload = await getAllMetrics(runningInstances);
+  return c.json(payload);
+});
+
+metrics.get("/stream", async (c) => {
+  const userId = c.get("userId");
+
+  return streamSSE(c, async (stream) => {
+    let closed = false;
+    stream.onAbort(() => {
+      closed = true;
+    });
+
+    const sendMetrics = async () => {
+      const userInstances = await listUserInstances(userId);
+      const runningInstances = userInstances.filter((i) => i.status === "running");
+      const payload = await getAllMetrics(runningInstances);
+
+      await stream.writeSSE({
+        event: "metrics",
+        data: JSON.stringify(payload),
+      });
+    };
+
+    await sendMetrics();
+
+    while (!closed) {
+      await stream.sleep(STREAM_INTERVAL_MS);
+      if (closed) break;
+      await sendMetrics();
+    }
+  });
+});
+
+export default metrics;
