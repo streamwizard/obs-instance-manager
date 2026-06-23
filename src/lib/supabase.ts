@@ -14,7 +14,7 @@ export const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
 
 export async function getNode(nodeId: string): Promise<Node> {
   const { data, error } = await supabase
-    .from("nodes")
+    .from("obs_nodes")
     .select("*")
     .eq("id", nodeId)
     .single();
@@ -24,7 +24,7 @@ export async function getNode(nodeId: string): Promise<Node> {
 
 export async function getDefaultNode(): Promise<Node> {
   const { data, error } = await supabase
-    .from("nodes")
+    .from("obs_nodes")
     .select("*")
     .order("created_at", { ascending: true })
     .limit(1)
@@ -35,7 +35,7 @@ export async function getDefaultNode(): Promise<Node> {
 
 export async function listUserInstances(userId: string): Promise<Instance[]> {
   const { data, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
@@ -48,7 +48,7 @@ export async function getInstanceById(
   userId: string
 ): Promise<Instance | null> {
   const { data, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .select("*")
     .eq("id", instanceId)
     .eq("user_id", userId)
@@ -61,7 +61,7 @@ export async function insertInstance(
   instance: Omit<Instance, "created_at">
 ): Promise<Instance> {
   const { data, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .insert(instance)
     .select()
     .single();
@@ -74,7 +74,7 @@ export async function updateInstance(
   fields: Partial<Instance>
 ): Promise<Instance> {
   const { data, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .update(fields)
     .eq("id", instanceId)
     .select()
@@ -84,13 +84,13 @@ export async function updateInstance(
 }
 
 export async function deleteInstance(instanceId: string): Promise<void> {
-  const { error } = await supabase.from("instances").delete().eq("id", instanceId);
+  const { error } = await supabase.from("obs_instances").delete().eq("id", instanceId);
   if (error) throw error;
 }
 
 export async function getUsedPorts(nodeId: string): Promise<UsedPorts> {
   const { data, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .select("vnc_port, novnc_port, obs_ws_port")
     .eq("node_id", nodeId)
     .neq("status", "error");
@@ -106,7 +106,7 @@ export async function getUsedPorts(nodeId: string): Promise<UsedPorts> {
 
 export async function sumAllocatedVram(nodeId: string): Promise<number> {
   const { data, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .select("vram_allocated_mb")
     .eq("node_id", nodeId)
     .eq("status", "running");
@@ -118,7 +118,7 @@ export async function sumAllocatedVram(nodeId: string): Promise<number> {
 
 export async function countActiveInstances(nodeId: string): Promise<number> {
   const { count, error } = await supabase
-    .from("instances")
+    .from("obs_instances")
     .select("id", { count: "exact", head: true })
     .eq("node_id", nodeId)
     .in("status", ["creating", "running"] as InstanceStatus[]);

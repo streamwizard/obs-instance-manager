@@ -10,9 +10,28 @@ REST API backend that manages OBS cloud containers on demand. Each container run
 - [cAdvisor](https://github.com/google/cadvisor) running on the host, used for per-container CPU/RAM metrics (see below)
 - A Supabase project (local or hosted)
 
-## Running cAdvisor
+## Running everything with Docker Compose
 
-Per-container CPU and RAM metrics come from cAdvisor's REST API rather than polling `docker stats` directly. Run it alongside the Docker daemon it should monitor:
+The included `docker-compose.yml` builds the API image and runs it alongside cAdvisor — this is the recommended way to run on the host.
+
+```bash
+cp .env.example .env
+# fill in .env with your Supabase project values
+docker compose up -d --build
+```
+
+This starts:
+
+- **`api`** — the REST API, built from the included `Dockerfile`, with the host's Docker socket mounted (so it can manage sibling OBS containers) and GPU access passed through (`gpus: all`) for `nvidia-smi`.
+- **`cadvisor`** — used for per-container CPU/RAM metrics. It sits on an internal-only `internal` Docker network shared with `api` and has no port published to the host — only the `api` container can reach it, at `http://cadvisor:8080` (already wired up via the `CADVISOR_URL` env var in the compose file).
+
+Requirements on the host: Docker with the NVIDIA Container Toolkit installed (so `gpus: all` and `nvidia-smi` work inside the `api` container), and `nvidia-smi`-capable drivers installed on the host itself.
+
+GPU/VRAM metrics are unaffected by any of this — cAdvisor has no per-process GPU support, so VRAM-per-container still comes from cross-referencing `nvidia-smi --query-compute-apps` PIDs against each container's process list (via Docker `top`), run directly inside the `api` container.
+
+## Running without Docker Compose
+
+If you'd rather run the API directly with Bun and cAdvisor as a separate container:
 
 ```bash
 docker run \
@@ -29,8 +48,6 @@ docker run \
 
 Set `CADVISOR_URL` (default `http://localhost:8080`) if it's reachable somewhere other than localhost.
 
-GPU/VRAM metrics are unaffected — cAdvisor has no per-process GPU support, so VRAM-per-container still comes from cross-referencing `nvidia-smi --query-compute-apps` PIDs against each container's process list (via Docker `top`).
-
 ## Setup
 
 ```bash
@@ -39,18 +56,11 @@ cp .env.example .env
 # fill in .env with your Supabase project values
 ```
 
-## Running the migration
+## Database schema
 
-Using the Supabase CLI:
+This API shares its Supabase database with the main [streamwizard](https://github.com/streamwizard/streamwizard) monorepo, so the `obs_nodes` and `obs_instances` table migration lives there: `supabase/migrations/20260623000000_obs_instances.sql`. Apply it via that repo's Supabase CLI workflow (`supabase db push` / `supabase migration up`), not from this repo.
 
-```bash
-supabase db push
-# or, for local development:
-supabase start
-supabase migration up
-```
-
-This creates the `nodes` and `instances` tables, enables RLS on `instances`, and seeds one default `nodes` row. Before going to production, update the seeded `gpu_bus_id` to match the actual host:
+It creates the `obs_nodes` and `obs_instances` tables, enables RLS on both (`obs_nodes` is service-role only; `obs_instances` allows owners to read/delete their own rows), and seeds one default `obs_nodes` row. Before going to production, update the seeded `gpu_bus_id` to match the actual host:
 
 ```bash
 nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader
