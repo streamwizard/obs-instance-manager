@@ -3,10 +3,10 @@
 This describes the Wings-style "add a node, get an install command, run it,
 node links itself" flow for obs-instance-manager. The panel side (the piece
 that creates `obs_nodes` rows and issues claim tokens) lives in the
-`streamwizard` monorepo, not in this repo — this doc is the contract the panel
-needs to implement against. Nothing here is built yet; `scripts/install.sh` in
-this repo already speaks this protocol on the node side (`--panel-url` /
-`--token` flags) and falls back to manual `.env` setup when they're omitted.
+`streamwizard` monorepo's `rest-api` app, not in this repo — this doc is the
+contract that app needs to implement against. `scripts/install.sh` in this
+repo speaks this protocol on the node side (`--rest-api-url` / `--token`
+flags) and falls back to manual `.env` setup when they're omitted.
 
 ## Why a node needs to know who it is
 
@@ -32,7 +32,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/streamwizard/obs-instance-manager/main/scripts/install.sh \
-     | sudo bash -s -- --panel-url=https://panel.example.com --token=<claim-token>
+     | sudo bash -s -- --rest-api-url=https://api.example.com --token=<claim-token>
    ```
 
 3. **Admin runs that command on the new VM.** `install.sh` provisions the
@@ -40,7 +40,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    user, `/opt/obs-instance-manager` checkout) and then calls:
 
    ```
-   POST {panel-url}/api/nodes/claim
+   POST {rest-api-url}/api/nodes/claim
    Content-Type: application/json
 
    {
@@ -53,62 +53,54 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    ```
 
    (`gpu_bus_id` from `nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader`,
-   the rest from `/proc/meminfo` and `nproc`.)
+   the rest from `/proc/meminfo` and `nproc`.) This lives in `rest-api`
+   rather than the Next.js panel app — it's a machine-to-machine endpoint
+   with no Supabase session involved, hit by a fresh, untrusted VM with
+   nothing but a one-time token, which fits `rest-api`'s existing
+   brute-force protection and security middleware better than the
+   cookie/session-oriented routes in the web app.
 
-4. **Panel validates and responds.** Look up the pending node by token hash,
-   reject if expired/already claimed/not found (`404`). On success: mark the
-   token consumed, fill in `gpu_bus_id` on the row, generate a random
-   `admin_token` (separate from the claim token — this one is long-lived,
-   used for every metrics poll, see below) and store it **in plaintext** on
-   the row (consistent with the existing trust tier: `obs_nodes` is already
-   service-role-only via RLS, and every node already holds the global
-   service-role key, so this isn't a new exposure), set `status = 'linked'`,
-   and return:
+4. **rest-api validates and responds.** Look up the pending node by token
+   hash, reject if expired/already claimed/not found (`404`). On success:
+   mark the token consumed, fill in `gpu_bus_id` on the row, set
+   `status = 'linked'`, and return:
 
    ```json
    {
      "node_id": "<uuid, the obs_nodes.id>",
-     "node_admin_token": "<random secret, store as obs_nodes.admin_token>",
      "supabase_url": "https://xxxx.supabase.co",
      "supabase_service_role_key": "...",
      "supabase_jwt_secret": "..."
    }
    ```
 
-5. **Node writes `.env`** from that response (`NODE_ID`, `NODE_ADMIN_TOKEN`,
+5. **Node writes `.env`** from that response (`NODE_ID`,
    `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`) and
    brings the stack up.
 
 ## Realtime admin metrics
 
 Every node exposes `GET /admin/metrics/stream` — a WebSocket, authenticated
-via `Authorization: Bearer <admin_token>` or `?token=<admin_token>` (the
-same node-wide `admin_token` from step 4 above, checked with a
-constant-time comparison in `src/routes/admin.ts`). On connect it pushes a
+the same way as every end-user `/metrics/*` route: a Supabase JWT
+(`Authorization: Bearer <token>` or `?token=<token>`), checked in
+`src/routes/admin.ts`. The only difference from the end-user routes is the
+authorization check — instead of "does this JWT's user own this instance",
+it's "does this JWT's user have the `admin` role in `user_roles`" (a plain
+service-role query the node already has the credentials to run). `403` if
+the JWT is valid but the user isn't an admin. On connect it pushes a
 `MetricsPayload` (same shape as `/metrics/snapshot`, but for **every**
 instance on the node, not scoped to one end user) immediately and then
 every 3 seconds for as long as the connection stays open.
 
-This is deliberately separate from the end-user `/metrics/*` routes (which
-use Supabase JWTs and are scoped to the calling user's own instances) — the
-panel is not a Supabase end user, so it needs its own node-level credential.
-
-To use this from the panel:
-
-1. Add an `api_url` column to `obs_nodes` (e.g. `http://10.10.10.185:3000`)
-   — the admin enters this when creating the node, since they're the one
-   who knows its reachable LAN/public address. It has nothing to do with
-   the claim handshake; it's just "where do I reach this node's API."
-2. Add an `admin_token` column (plaintext, set during claim as above).
-3. From a **server-side** process (not the admin's browser — don't ship
-   node addresses or admin_token to the client), open
-   `ws://{api_url}/admin/metrics/stream?token={admin_token}` per linked
-   node and re-broadcast the payloads to whichever admin browsers are
-   viewing the Nodes page, over the panel's own auth (however this repo
-   already does realtime/websockets — check before adding a second
-   mechanism). This mirrors how Wings' browser clients never see the
-   daemon's own bearer token: the Panel sits in between and re-authenticates
-   the browser side separately.
+Because this is gated by the caller's own admin-scoped JWT rather than a
+separate node-wide secret, an admin's browser can open this websocket
+**directly** — `ws://{api_url}/admin/metrics/stream?token={supabase_jwt}` —
+the same way an end user's browser connects directly to `/metrics/stream`,
+`/instances/:id/novnc`, and `/instances/:id/obsws`. No panel-side relay or
+node-wide credential is needed. `api_url` (e.g. `http://10.10.10.185:3000`,
+or a Cloudflare Tunnel hostname) is set by the admin when creating the node
+in the panel UI — it's just "where do I reach this node's API", unrelated
+to the claim handshake.
 
 ## Target architecture: nodes hold no real state
 
@@ -166,8 +158,7 @@ alter table obs_nodes
   add column if not exists status text not null default 'linked',
   add column if not exists claim_token_hash text,
   add column if not exists claim_token_expires_at timestamptz,
-  add column if not exists api_url text,
-  add column if not exists admin_token text;
+  add column if not exists api_url text;
 
 alter table obs_instances
   drop column if exists vnc_port,
@@ -177,3 +168,9 @@ alter table obs_instances
 
 Existing `obs_nodes` rows (including the seeded default one) should have
 `status` backfilled to `'linked'` since they're already running.
+
+Note: an earlier version of this doc also had this migration add an
+`admin_token` column, used to authenticate a panel-side relay for
+`/admin/metrics/stream`. That's gone now — see "Realtime admin metrics"
+above — the admin browser connects directly using its own Supabase JWT,
+so no separate node-wide secret or relay is needed.

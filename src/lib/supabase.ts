@@ -26,6 +26,19 @@ async function logged<T>(label: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+export async function isAdmin(userId: string): Promise<boolean> {
+  return logged(`isAdmin(${userId})`, async () => {
+    const { data, error } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("role", "admin")
+      .maybeSingle();
+    if (error) throw error;
+    return !!data;
+  });
+}
+
 export async function getNode(nodeId: string): Promise<Node> {
   return logged(`getNode(${nodeId})`, async () => {
     const { data, error } = await supabase

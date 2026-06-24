@@ -4,14 +4,14 @@
 #
 # Provisions an Ubuntu host to run obs-instance-manager + cAdvisor as a
 # dedicated `obs` service account, then either links the node to a panel
-# (if --panel-url/--token are given) or scaffolds a local .env for manual
+# (if --rest-api-url/--token are given) or scaffolds a local .env for manual
 # setup. See docs/PANEL_INTEGRATION.md for the linking contract.
 #
 # Usage:
 #   sudo bash install.sh [options]
 #
 # Options:
-#   --panel-url=URL       Panel base URL, e.g. https://panel.example.com
+#   --rest-api-url=URL    Panel's rest-api base URL, e.g. https://api.example.com
 #   --token=TOKEN         One-time node claim token issued by the panel
 #   --allow-cidr=CIDR     Source CIDR allowed through the firewall (default: auto-detected LAN /24)
 #   --api-port=PORT       Host port for the API (default: 3000)
@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-PANEL_URL=""
+REST_API_URL=""
 TOKEN=""
 ALLOW_CIDR=""
 API_PORT="3000"
@@ -53,7 +53,7 @@ curl_with_backoff() {
 
 for arg in "$@"; do
   case "$arg" in
-    --panel-url=*) PANEL_URL="${arg#*=}" ;;
+    --rest-api-url=*) REST_API_URL="${arg#*=}" ;;
     --token=*) TOKEN="${arg#*=}" ;;
     --allow-cidr=*) ALLOW_CIDR="${arg#*=}" ;;
     --api-port=*) API_PORT="${arg#*=}" ;;
@@ -153,17 +153,17 @@ fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 
 ENV_FILE="$REPO_DIR/.env"
-if [ -n "$PANEL_URL" ] && [ -n "$TOKEN" ]; then
-  log "Linking to panel at $PANEL_URL..."
+if [ -n "$REST_API_URL" ] && [ -n "$TOKEN" ]; then
+  log "Linking to panel via rest-api at $REST_API_URL..."
   GPU_BUS_ID="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | head -n1)"
   VRAM_TOTAL_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)"
   RAM_TOTAL_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   CPU_CORES="$(nproc)"
 
-  CLAIM_RESPONSE="$(curl_with_backoff -fsSL -X POST "$PANEL_URL/api/nodes/claim" \
+  CLAIM_RESPONSE="$(curl_with_backoff -fsSL -X POST "$REST_API_URL/api/nodes/claim" \
     -H "Content-Type: application/json" \
     -d "{\"token\":\"$TOKEN\",\"gpu_bus_id\":\"$GPU_BUS_ID\",\"vram_total_mb\":$VRAM_TOTAL_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"cpu_cores\":$CPU_CORES}")" \
-    || die "Node claim request to $PANEL_URL failed after retries. Check the URL/token and that the panel's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
+    || die "Node claim request to $REST_API_URL failed after retries. Check the URL/token and that rest-api's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
 
   python3 - "$ENV_FILE" "$CLAIM_RESPONSE" <<'PY'
 import json, sys
@@ -171,7 +171,6 @@ env_path, raw = sys.argv[1], sys.argv[2]
 data = json.loads(raw)
 with open(env_path, "w") as f:
     f.write(f"NODE_ID={data['node_id']}\n")
-    f.write(f"NODE_ADMIN_TOKEN={data['node_admin_token']}\n")
     f.write(f"SUPABASE_URL={data['supabase_url']}\n")
     f.write(f"SUPABASE_SERVICE_ROLE_KEY={data['supabase_service_role_key']}\n")
     f.write(f"SUPABASE_JWT_SECRET={data['supabase_jwt_secret']}\n")
@@ -182,7 +181,7 @@ PY
 else
   if [ ! -f "$ENV_FILE" ]; then
     cp "$REPO_DIR/.env.example" "$ENV_FILE"
-    warn "No --panel-url/--token given. Scaffolded $ENV_FILE from .env.example — fill in NODE_ID, NODE_ADMIN_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET by hand before starting."
+    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example — fill in NODE_ID, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET by hand before starting."
   else
     log "$ENV_FILE already exists, leaving it as-is."
   fi
@@ -194,7 +193,7 @@ log "Building images as $SERVICE_USER..."
 sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose build"
 
 ENV_COMPLETE="true"
-for key in NODE_ID NODE_ADMIN_TOKEN SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_JWT_SECRET; do
+for key in NODE_ID SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_JWT_SECRET; do
   grep -q "^${key}=.\+" "$ENV_FILE" || ENV_COMPLETE="false"
 done
 

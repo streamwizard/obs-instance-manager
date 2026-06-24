@@ -1,8 +1,8 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
-import { listNodeInstances } from "../lib/supabase";
+import { isAdmin, listNodeInstances } from "../lib/supabase";
 import { getAllMetrics } from "../lib/metrics";
-import { NODE_ADMIN_TOKEN, NODE_ID } from "../lib/node";
+import { NODE_ID } from "../lib/node";
+import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug } from "../lib/logger";
 import type { AppVariables } from "../types";
@@ -11,32 +11,23 @@ const STREAM_INTERVAL_MS = 3000;
 
 const admin = new Hono<{ Variables: AppVariables }>();
 
-// Hash both sides to a fixed length before comparing so a length mismatch on
-// the raw token can't short-circuit the comparison (timingSafeEqual throws
-// on mismatched lengths, which itself leaks timing/length information).
-function constantTimeTokenMatch(candidate: string): boolean {
-  const expected = createHash("sha256").update(NODE_ADMIN_TOKEN).digest();
-  const actual = createHash("sha256").update(candidate).digest();
-  return timingSafeEqual(expected, actual);
-}
-
-async function requireNodeAdminToken(c: Context<{ Variables: AppVariables }>, next: Next) {
-  const header = c.req.header("Authorization");
-  const bearer = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
-  const token = bearer ?? c.req.query("token");
-
-  if (!token || !constantTimeTokenMatch(token)) {
-    return c.json({ error: "Invalid or missing node admin token" }, 401);
+// Same JWT auth every end-user route uses (authMiddleware) -- the only
+// difference here is the authorization check is "has the admin role"
+// instead of "owns this instance".
+async function requireAdmin(c: Context<{ Variables: AppVariables }>, next: Next) {
+  const userId = c.get("userId");
+  if (!(await isAdmin(userId))) {
+    return c.json({ error: "Forbidden" }, 403);
   }
-
   await next();
 }
 
-admin.use("*", requireNodeAdminToken);
+admin.use("*", authMiddleware, requireAdmin);
 
 // Node-wide metrics for every instance on this node, not just one user's —
-// this is what the panel's admin Nodes page consumes, never exposed to
-// end-user browsers directly.
+// this is what the panel's admin Nodes page consumes, gated by the caller's
+// own Supabase JWT having the admin role (same as every other route here,
+// just a role check instead of an ownership check).
 admin.get(
   "/metrics/stream",
   upgradeWebSocket(() => {

@@ -20,10 +20,10 @@ sudo bash scripts/install.sh --start
 ```
 
 By default it only opens the firewall to your auto-detected LAN `/24` and
-expects you to fill in `.env` by hand afterward (`NODE_ID`, `NODE_ADMIN_TOKEN`,
+expects you to fill in `.env` by hand afterward (`NODE_ID`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`). If a panel implementing
 the claim handshake in `docs/PANEL_INTEGRATION.md` exists, pass
-`--panel-url` and `--token` instead and the script links itself
+`--rest-api-url` and `--token` instead and the script links itself
 automatically. Run `scripts/install.sh --help` for all options.
 
 This requires GPU passthrough already configured at the hypervisor level and
@@ -132,7 +132,6 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 | Variable | Description |
 |---|---|
 | `NODE_ID` | The `obs_nodes.id` row this process represents. Required — every instance-manager process serves exactly one node. |
-| `NODE_ADMIN_TOKEN` | Long-lived secret authenticating the panel's `/admin/metrics/stream` connection. Issued during panel linking, not a Supabase JWT. |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key, used by the backend to bypass RLS for all writes |
 | `SUPABASE_JWT_SECRET` | Used to verify user JWTs in the auth middleware |
@@ -234,5 +233,5 @@ All `/instances` and `/metrics` routes require authentication: send the Supabase
 
 ### `GET /admin/metrics/stream`
 
-- **Auth:** `Authorization: Bearer <NODE_ADMIN_TOKEN>` or `?token=` — not a Supabase user JWT. This is the node-level credential issued during panel linking (see `docs/PANEL_INTEGRATION.md`), checked with a constant-time comparison.
-- **Behavior:** WebSocket. Pushes a `MetricsPayload` immediately on connect and then every 3 seconds, covering **every** instance on this node (not scoped to one user) — this is what a panel's admin Nodes page consumes. Never call this from an end-user's browser; the panel should proxy it server-side.
+- **Auth:** required — a Supabase JWT (`Authorization: Bearer <token>` or `?token=`), same as every other route here, but the caller must additionally have the `admin` role in `user_roles`. `403` if the JWT is valid but the user isn't an admin.
+- **Behavior:** WebSocket. Pushes a `MetricsPayload` immediately on connect and then every 3 seconds, covering **every** instance on this node (not scoped to one user) — this is what a panel's admin Nodes page consumes. Since this is gated by the caller's own admin-scoped JWT rather than a node-wide secret, the admin's browser can connect directly — no server-side relay needed.
