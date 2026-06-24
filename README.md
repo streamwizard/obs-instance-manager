@@ -31,6 +31,24 @@ the NVIDIA driver already installed on the host — the script checks for both
 and exits with instructions rather than attempting to install kernel drivers
 itself.
 
+### Removing a node
+
+`scripts/uninstall.sh` reverses `install.sh`: it stops the stack, removes the
+OBS containers/images and the `obs-net` network, deletes `/data/obs-configs`
+and the repo checkout, and removes the `obs` service account.
+
+```bash
+sudo bash scripts/uninstall.sh
+```
+
+By default it leaves Docker, the NVIDIA Container Toolkit, and ufw installed
+(other things on the host may depend on them). Pass `--purge-docker`,
+`--purge-nvidia-toolkit`, `--remove-ufw-rule`, and/or `--disable-ufw` (or
+`--all` for all four) to fully reset a host back to a pre-`install.sh` state
+— useful when testing the installer itself. Run `scripts/uninstall.sh --help`
+for all options; it always asks for confirmation first unless `--yes` is
+given.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh) (v1.3+) — only needed for local dev outside Docker
