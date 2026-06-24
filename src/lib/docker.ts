@@ -61,6 +61,10 @@ export async function createContainer(
       // SYS_ADMIN is required by OBS's browser-source plugin, which ships a
       // setuid-root chrome-sandbox binary (standard Chromium sandboxing).
       CapAdd: ["SYS_ADMIN"],
+      // Docker's default AppArmor profile blocks the mount/userns syscalls
+      // bwrap needs to jail OBS (entrypoint.sh), independent of CapAdd above.
+      // Unconfined here only relaxes MAC inside this already-isolated container.
+      SecurityOpt: ["apparmor=unconfined"],
       // Pin swap to the memory limit so a container can't exceed it by swapping.
       Memory: memoryBytes,
       MemoryReservation: memoryBytes,
