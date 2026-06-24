@@ -57,21 +57,58 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
 
 4. **Panel validates and responds.** Look up the pending node by token hash,
    reject if expired/already claimed/not found (`404`). On success: mark the
-   token consumed, fill in `gpu_bus_id` on the row, set `status = 'linked'`,
+   token consumed, fill in `gpu_bus_id` on the row, generate a random
+   `admin_token` (separate from the claim token — this one is long-lived,
+   used for every metrics poll, see below) and store it **in plaintext** on
+   the row (consistent with the existing trust tier: `obs_nodes` is already
+   service-role-only via RLS, and every node already holds the global
+   service-role key, so this isn't a new exposure), set `status = 'linked'`,
    and return:
 
    ```json
    {
      "node_id": "<uuid, the obs_nodes.id>",
+     "node_admin_token": "<random secret, store as obs_nodes.admin_token>",
      "supabase_url": "https://xxxx.supabase.co",
      "supabase_service_role_key": "...",
      "supabase_jwt_secret": "..."
    }
    ```
 
-5. **Node writes `.env`** from that response (`NODE_ID`,
+5. **Node writes `.env`** from that response (`NODE_ID`, `NODE_ADMIN_TOKEN`,
    `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`) and
    brings the stack up.
+
+## Realtime admin metrics
+
+Every node exposes `GET /admin/metrics/stream` — a WebSocket, authenticated
+via `Authorization: Bearer <admin_token>` or `?token=<admin_token>` (the
+same node-wide `admin_token` from step 4 above, checked with a
+constant-time comparison in `src/routes/admin.ts`). On connect it pushes a
+`MetricsPayload` (same shape as `/metrics/snapshot`, but for **every**
+instance on the node, not scoped to one end user) immediately and then
+every 3 seconds for as long as the connection stays open.
+
+This is deliberately separate from the end-user `/metrics/*` routes (which
+use Supabase JWTs and are scoped to the calling user's own instances) — the
+panel is not a Supabase end user, so it needs its own node-level credential.
+
+To use this from the panel:
+
+1. Add an `api_url` column to `obs_nodes` (e.g. `http://10.10.10.185:3000`)
+   — the admin enters this when creating the node, since they're the one
+   who knows its reachable LAN/public address. It has nothing to do with
+   the claim handshake; it's just "where do I reach this node's API."
+2. Add an `admin_token` column (plaintext, set during claim as above).
+3. From a **server-side** process (not the admin's browser — don't ship
+   node addresses or admin_token to the client), open
+   `ws://{api_url}/admin/metrics/stream?token={admin_token}` per linked
+   node and re-broadcast the payloads to whichever admin browsers are
+   viewing the Nodes page, over the panel's own auth (however this repo
+   already does realtime/websockets — check before adding a second
+   mechanism). This mirrors how Wings' browser clients never see the
+   daemon's own bearer token: the Panel sits in between and re-authenticates
+   the browser side separately.
 
 ## Target architecture: nodes hold no real state
 
@@ -128,7 +165,9 @@ alter table obs_nodes
   drop column if exists obs_ws_port_end,
   add column if not exists status text not null default 'linked',
   add column if not exists claim_token_hash text,
-  add column if not exists claim_token_expires_at timestamptz;
+  add column if not exists claim_token_expires_at timestamptz,
+  add column if not exists api_url text,
+  add column if not exists admin_token text;
 
 alter table obs_instances
   drop column if exists vnc_port,
