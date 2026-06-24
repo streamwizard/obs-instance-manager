@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import type { Instance, InstanceStatus, Node, UsedPorts } from "../types";
+import type { Instance, InstanceStatus, Node } from "../types";
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -17,17 +17,6 @@ export async function getNode(nodeId: string): Promise<Node> {
     .from("obs_nodes")
     .select("*")
     .eq("id", nodeId)
-    .single();
-  if (error) throw error;
-  return data as Node;
-}
-
-export async function getDefaultNode(): Promise<Node> {
-  const { data, error } = await supabase
-    .from("obs_nodes")
-    .select("*")
-    .order("created_at", { ascending: true })
-    .limit(1)
     .single();
   if (error) throw error;
   return data as Node;
@@ -86,22 +75,6 @@ export async function updateInstance(
 export async function deleteInstance(instanceId: string): Promise<void> {
   const { error } = await supabase.from("obs_instances").delete().eq("id", instanceId);
   if (error) throw error;
-}
-
-export async function getUsedPorts(nodeId: string): Promise<UsedPorts> {
-  const { data, error } = await supabase
-    .from("obs_instances")
-    .select("vnc_port, novnc_port, obs_ws_port")
-    .eq("node_id", nodeId)
-    .neq("status", "error");
-  if (error) throw error;
-
-  const rows = (data ?? []) as { vnc_port: number; novnc_port: number; obs_ws_port: number }[];
-  return {
-    vnc: rows.map((r) => r.vnc_port),
-    novnc: rows.map((r) => r.novnc_port),
-    obs_ws: rows.map((r) => r.obs_ws_port),
-  };
 }
 
 export async function sumAllocatedVram(nodeId: string): Promise<number> {

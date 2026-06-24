@@ -4,12 +4,6 @@ export interface Node {
   id: string;
   name: string;
   max_instances: number;
-  vnc_port_start: number;
-  vnc_port_end: number;
-  novnc_port_start: number;
-  novnc_port_end: number;
-  obs_ws_port_start: number;
-  obs_ws_port_end: number;
   memory_mb: number;
   cpu_quota: number;
   vram_mb: number;
@@ -25,9 +19,6 @@ export interface Instance {
   node_id: string;
   container_id: string | null;
   container_name: string;
-  vnc_port: number;
-  novnc_port: number;
-  obs_ws_port: number;
   resolution: string;
   status: InstanceStatus;
   vram_allocated_mb: number;
@@ -36,18 +27,6 @@ export interface Instance {
 
 export interface CreateInstanceBody {
   resolution?: string;
-}
-
-export interface UsedPorts {
-  vnc: number[];
-  novnc: number[];
-  obs_ws: number[];
-}
-
-export interface AllocatedPorts {
-  vnc_port: number;
-  novnc_port: number;
-  obs_ws_port: number;
 }
 
 export interface HostMetrics {
