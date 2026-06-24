@@ -17,6 +17,7 @@ const admin = new Hono<{ Variables: AppVariables }>();
 async function requireAdmin(c: Context<{ Variables: AppVariables }>, next: Next) {
   const userId = c.get("userId");
   if (!(await isAdmin(userId))) {
+    debug("auth", `user ${userId} is not an admin, rejecting ${c.req.path}`);
     return c.json({ error: "Forbidden" }, 403);
   }
   await next();
