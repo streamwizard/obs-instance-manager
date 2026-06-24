@@ -91,6 +91,20 @@ export async function getInstanceById(
   });
 }
 
+// Admin variant of getInstanceById with no ownership check -- callers must
+// gate access themselves (see admin.ts's requireAdmin).
+export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance | null> {
+  return logged(`getInstanceByIdAdmin(${instanceId})`, async () => {
+    const { data, error } = await supabase
+      .from("obs_instances")
+      .select("*")
+      .eq("id", instanceId)
+      .maybeSingle();
+    if (error) throw error;
+    return data as Instance | null;
+  });
+}
+
 export async function insertInstance(
   instance: Omit<Instance, "created_at">
 ): Promise<Instance> {

@@ -155,17 +155,23 @@ export async function getAllMetrics(instances: Instance[]): Promise<MetricsPaylo
   const containerMetricsList = await Promise.all(
     runningInstances.map(async (instance) => {
       const ramLimitMb = await getNodeMemoryMb(instance.node_id);
-      const metrics = await getContainerMetrics(
-        instance.container_id as string,
-        computeApps,
-        ramLimitMb
-      );
-      return [instance.id, metrics] as const;
+      try {
+        const metrics = await getContainerMetrics(
+          instance.container_id as string,
+          computeApps,
+          ramLimitMb
+        );
+        return [instance.id, metrics] as const;
+      } catch {
+        return null;
+      }
     })
   );
 
   const containers: Record<string, ContainerMetrics> = {};
-  for (const [id, metrics] of containerMetricsList) {
+  for (const entry of containerMetricsList) {
+    if (!entry) continue;
+    const [id, metrics] = entry;
     containers[id] = metrics;
   }
 

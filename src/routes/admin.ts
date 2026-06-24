@@ -1,6 +1,7 @@
 import { Hono, type Context, type Next } from "hono";
-import { isAdmin, listNodeInstances } from "../lib/supabase";
+import { getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../lib/supabase";
 import { getAllMetrics } from "../lib/metrics";
+import { startContainer, stopContainer } from "../lib/docker";
 import { NODE_ID } from "../lib/node";
 import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../lib/ws";
@@ -56,5 +57,37 @@ admin.get(
     };
   })
 );
+
+// Admin-scoped start/stop -- same docker actions as the end-user
+// /instances/:id/start|stop routes, but looked up without an owning-user
+// filter since the caller's authority here comes from the admin role check,
+// not instance ownership.
+admin.post("/instances/:id/start", async (c) => {
+  const id = c.req.param("id");
+
+  const instance = await getInstanceByIdAdmin(id);
+  if (!instance) return c.json({ error: "Instance not found" }, 404);
+  if (!instance.container_id)
+    return c.json({ error: "Instance has no container" }, 400);
+
+  await startContainer(instance.container_id);
+  const updated = await updateInstance(id, { status: "running" });
+
+  return c.json(updated);
+});
+
+admin.post("/instances/:id/stop", async (c) => {
+  const id = c.req.param("id");
+
+  const instance = await getInstanceByIdAdmin(id);
+  if (!instance) return c.json({ error: "Instance not found" }, 404);
+  if (!instance.container_id)
+    return c.json({ error: "Instance has no container" }, 400);
+
+  await stopContainer(instance.container_id);
+  const updated = await updateInstance(id, { status: "stopped" });
+
+  return c.json(updated);
+});
 
 export default admin;
