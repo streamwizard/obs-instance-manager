@@ -60,7 +60,11 @@ export async function createContainer(
       ShmSize: parseShmSize(node.shm_size),
       // SYS_ADMIN is required by OBS's browser-source plugin, which ships a
       // setuid-root chrome-sandbox binary (standard Chromium sandboxing).
-      CapAdd: ["SYS_ADMIN"],
+      // NET_ADMIN and SYS_PTRACE are required because bwrap (entrypoint.sh)
+      // acquires its capability bundle via a single capset() call that fails
+      // entirely if any one of SYS_ADMIN/NET_ADMIN/SYS_PTRACE/SETUID/SETGID/
+      // SYS_CHROOT is missing from the container's capability set.
+      CapAdd: ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"],
       // Docker's default AppArmor and seccomp profiles both block the
       // userns/capset syscalls bwrap needs to jail OBS (entrypoint.sh),
       // independent of CapAdd above. Unconfined here only relaxes MAC/syscall
