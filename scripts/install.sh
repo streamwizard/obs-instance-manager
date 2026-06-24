@@ -155,7 +155,16 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 ENV_FILE="$REPO_DIR/.env"
 if [ -n "$REST_API_URL" ] && [ -n "$TOKEN" ]; then
   log "Linking to panel via rest-api at $REST_API_URL..."
-  GPU_BUS_ID="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | head -n1)"
+  # nvidia-smi reports domain:bus:device.function in hex (e.g. 00000000:00:10.0).
+  # Xorg's BusID option needs "PCI:bus:device:function" in decimal, so convert here
+  # once at registration time rather than in every consumer of gpu_bus_id.
+  GPU_BUS_ID_RAW="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | head -n1)"
+  GPU_BUS_ID="$(python3 -c "
+addr = '$GPU_BUS_ID_RAW'.split(':')
+bus, dev_func = addr[-2], addr[-1]
+dev, func = dev_func.split('.')
+print(f'PCI:{int(bus, 16)}:{int(dev, 16)}:{int(func, 16)}')
+")"
   VRAM_TOTAL_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)"
   RAM_TOTAL_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   CPU_CORES="$(nproc)"
