@@ -138,6 +138,7 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 | `PORT` | Port the API listens on (default `3000`) |
 | `CADVISOR_URL` | Base URL of the cAdvisor instance used for container CPU/RAM metrics (default `http://localhost:8080`) |
 | `OBS_NETWORK` | Docker network shared with instance containers for the websocket proxy (default `obs-net`) |
+| `PANEL_ORIGIN` | Comma-separated origin(s) allowed to call the REST API directly from a browser (CORS). Default `*` |
 
 ## API reference
 
