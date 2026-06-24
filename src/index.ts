@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import admin from "./routes/admin";
 import instances from "./routes/instances";
 import metrics from "./routes/metrics";
@@ -7,6 +8,20 @@ import { debug } from "./lib/logger";
 import type { AppVariables } from "./types";
 
 const app = new Hono<{ Variables: AppVariables }>();
+
+// REST routes (not the WebSocket upgrades) are called directly from the
+// panel's browser with an Authorization header, which triggers a CORS
+// preflight OPTIONS request -- without this, that preflight falls through
+// to authMiddleware and gets rejected for having no token, before the
+// browser ever sends the real request.
+app.use(
+  "*",
+  cors({
+    origin: (process.env.PANEL_ORIGIN ?? "*").split(","),
+    allowHeaders: ["Authorization", "Content-Type"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+  }),
+);
 
 app.use("*", async (c, next) => {
   const start = performance.now();
