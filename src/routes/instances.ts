@@ -23,6 +23,7 @@ import {
 import { NODE_ID } from "../lib/node";
 import { MessageRateLimiter } from "../lib/rate-limit";
 import { upgradeWebSocket } from "../lib/ws";
+import { debug } from "../lib/logger";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -52,22 +53,36 @@ function proxyRoute(port: number, messagesPerWindow: number, windowMs = 200) {
     return {
       onOpen(_event, ws) {
         if (!instance) {
+          debug("ws", `${id}:${port} rejected, instance not found`);
           ws.close(4404, "Instance not found");
           return;
         }
 
-        upstream = new WebSocket(`ws://${instanceTarget(instance.container_name, port)}`);
+        const target = instanceTarget(instance.container_name, port);
+        debug("ws", `${id}:${port} client connected, dialing upstream ${target}`);
+
+        upstream = new WebSocket(`ws://${target}`);
         upstream.binaryType = "arraybuffer";
         upstream.onopen = () => {
+          debug("ws", `${id}:${port} upstream connected, flushing ${queued.length} queued message(s)`);
           for (const message of queued) upstream?.send(message);
           queued = [];
         };
         upstream.onmessage = (event) => ws.send(event.data);
-        upstream.onclose = () => ws.close();
-        upstream.onerror = () => ws.close();
+        upstream.onclose = () => {
+          debug("ws", `${id}:${port} upstream closed`);
+          ws.close();
+        };
+        upstream.onerror = (event) => {
+          debug("ws", `${id}:${port} upstream error`, event);
+          ws.close();
+        };
       },
       onMessage(event, _ws) {
-        if (!limiter.allow()) return;
+        if (!limiter.allow()) {
+          debug("ws", `${id}:${port} message dropped, rate limit exceeded`);
+          return;
+        }
 
         const data = event.data as string | ArrayBufferLike;
         if (upstream && upstream.readyState === WebSocket.OPEN) {
@@ -77,6 +92,7 @@ function proxyRoute(port: number, messagesPerWindow: number, windowMs = 200) {
         }
       },
       onClose() {
+        debug("ws", `${id}:${port} client disconnected`);
         upstream?.close();
       },
     };

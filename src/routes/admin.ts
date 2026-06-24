@@ -4,6 +4,7 @@ import { listNodeInstances } from "../lib/supabase";
 import { getAllMetrics } from "../lib/metrics";
 import { NODE_ADMIN_TOKEN, NODE_ID } from "../lib/node";
 import { upgradeWebSocket } from "../lib/ws";
+import { debug } from "../lib/logger";
 import type { AppVariables } from "../types";
 
 const STREAM_INTERVAL_MS = 3000;
@@ -45,16 +46,19 @@ admin.get(
       const nodeInstances = await listNodeInstances(NODE_ID);
       const payload = await getAllMetrics(nodeInstances);
       ws.send(JSON.stringify(payload));
+      debug("ws", `metrics/stream sent payload for ${nodeInstances.length} instance(s)`);
     };
 
     return {
       onOpen(_event, ws) {
-        sendMetrics(ws).catch(() => {});
+        debug("ws", "metrics/stream client connected");
+        sendMetrics(ws).catch((err) => debug("ws", "metrics/stream send failed", err));
         interval = setInterval(() => {
-          sendMetrics(ws).catch(() => {});
+          sendMetrics(ws).catch((err) => debug("ws", "metrics/stream send failed", err));
         }, STREAM_INTERVAL_MS);
       },
       onClose() {
+        debug("ws", "metrics/stream client disconnected");
         if (interval) clearInterval(interval);
       },
     };

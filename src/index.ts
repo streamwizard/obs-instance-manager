@@ -3,9 +3,18 @@ import admin from "./routes/admin";
 import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./lib/ws";
+import { debug } from "./lib/logger";
 import type { AppVariables } from "./types";
 
 const app = new Hono<{ Variables: AppVariables }>();
+
+app.use("*", async (c, next) => {
+  const start = performance.now();
+  debug("http", `--> ${c.req.method} ${c.req.path}`);
+  await next();
+  const durationMs = (performance.now() - start).toFixed(1);
+  debug("http", `<-- ${c.req.method} ${c.req.path} ${c.res.status} (${durationMs}ms)`);
+});
 
 app.get("/health", (c) => c.json({ ok: true, timestamp: new Date().toISOString() }));
 
