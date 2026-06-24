@@ -59,12 +59,18 @@ function proxyRoute(port: number, messagesPerWindow: number, windowMs = 200) {
         }
 
         const target = instanceTarget(instance.container_name, port);
-        debug("ws", `${id}:${port} client connected, dialing upstream ${target}`);
+        debug(
+          "ws",
+          `${id}:${port} client connected, dialing upstream ${target}`,
+        );
 
         upstream = new WebSocket(`ws://${target}`);
         upstream.binaryType = "arraybuffer";
         upstream.onopen = () => {
-          debug("ws", `${id}:${port} upstream connected, flushing ${queued.length} queued message(s)`);
+          debug(
+            "ws",
+            `${id}:${port} upstream connected, flushing ${queued.length} queued message(s)`,
+          );
           for (const message of queued) upstream?.send(message);
           queued = [];
         };
@@ -112,7 +118,7 @@ instances.get("/", async (c) => {
       docker_status: instance.container_id
         ? await getContainerStatus(instance.container_id)
         : "not_found",
-    }))
+    })),
   );
 
   return c.json(withStatus);
@@ -134,7 +140,9 @@ instances.get("/:id", async (c) => {
 
 instances.post("/", async (c) => {
   const userId = c.get("userId") as string;
-  const body = await c.req.json<CreateInstanceBody>().catch(() => ({} as CreateInstanceBody));
+  const body = await c.req
+    .json<CreateInstanceBody>()
+    .catch(() => ({}) as CreateInstanceBody);
   const resolution = body.resolution ?? DEFAULT_RESOLUTION;
 
   const node = await getNode(NODE_ID);
@@ -146,7 +154,10 @@ instances.post("/", async (c) => {
 
   const currentVram = await sumAllocatedVram(node.id);
   if (currentVram + node.vram_mb > node.total_vram_mb) {
-    return c.json({ error: "Allocating this instance would exceed total_vram_mb" }, 409);
+    return c.json(
+      { error: "Allocating this instance would exceed total_vram_mb" },
+      409,
+    );
   }
 
   const instanceId = crypto.randomUUID();
@@ -190,7 +201,8 @@ instances.post("/:id/start", async (c) => {
 
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
-  if (!instance.container_id) return c.json({ error: "Instance has no container" }, 400);
+  if (!instance.container_id)
+    return c.json({ error: "Instance has no container" }, 400);
 
   await startContainer(instance.container_id);
   const updated = await updateInstance(id, { status: "running" });
@@ -204,7 +216,8 @@ instances.post("/:id/stop", async (c) => {
 
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
-  if (!instance.container_id) return c.json({ error: "Instance has no container" }, 400);
+  if (!instance.container_id)
+    return c.json({ error: "Instance has no container" }, 400);
 
   await stopContainer(instance.container_id);
   const updated = await updateInstance(id, { status: "stopped" });
