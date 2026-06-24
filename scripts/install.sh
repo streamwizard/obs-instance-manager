@@ -31,7 +31,6 @@ REPO_URL="https://github.com/streamwizard/obs-instance-manager.git"
 REPO_DIR="/opt/obs-instance-manager"
 SERVICE_USER="obs"
 DO_START="false"
-NETWORK_NAME="obs-net"
 
 log()  { echo "[install] $*"; }
 warn() { echo "[install] WARNING: $*" >&2; }
@@ -120,9 +119,6 @@ if [ "$NEEDS_RESTART" = "true" ]; then
 else
   log "nvidia runtime already registered."
 fi
-
-log "Ensuring the '$NETWORK_NAME' Docker network exists..."
-docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create "$NETWORK_NAME" >/dev/null
 
 if [ -z "$ALLOW_CIDR" ]; then
   ALLOW_CIDR="$(ip -o -4 addr show scope global | head -n1 | awk '{print $4}' | sed -E 's#\.[0-9]+/[0-9]+$#.0/24#')"
