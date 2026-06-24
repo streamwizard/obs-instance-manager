@@ -40,11 +40,18 @@ instances.use("*", authMiddleware);
 // container (mirrors Wings' WS throttle). noVNC gets a much higher ceiling
 // than obsws since mouse/keyboard streams are naturally high-frequency,
 // unlike sparse OBS control commands.
-function proxyRoute(port: number, messagesPerWindow: number, windowMs = 200) {
+//
+// getInstance is pluggable so the admin routes can reuse this proxy with an
+// ownership-free lookup (getInstanceByIdAdmin) instead of the end-user one.
+export function proxyRoute(
+  port: number,
+  messagesPerWindow: number,
+  getInstance: (id: string, c: any) => Promise<{ container_name: string } | null>,
+  windowMs = 200,
+) {
   return upgradeWebSocket(async (c) => {
-    const userId = c.get("userId") as string;
     const id = c.req.param("id") as string;
-    const instance = await getInstanceById(id, userId);
+    const instance = await getInstance(id, c);
     const limiter = new MessageRateLimiter(messagesPerWindow, windowMs);
 
     let upstream: WebSocket | null = null;
@@ -105,8 +112,11 @@ function proxyRoute(port: number, messagesPerWindow: number, windowMs = 200) {
   });
 }
 
-instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200));
-instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10));
+const getOwnedInstance = (id: string, c: any) =>
+  getInstanceById(id, c.get("userId") as string);
+
+instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, getOwnedInstance));
+instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, getOwnedInstance));
 
 instances.get("/", async (c) => {
   const userId = c.get("userId") as string;

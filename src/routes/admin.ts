@@ -1,11 +1,12 @@
 import { Hono, type Context, type Next } from "hono";
 import { getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../lib/supabase";
 import { getAllMetrics } from "../lib/metrics";
-import { startContainer, stopContainer } from "../lib/docker";
+import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, startContainer, stopContainer } from "../lib/docker";
 import { NODE_ID } from "../lib/node";
 import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug } from "../lib/logger";
+import { proxyRoute } from "./instances";
 import type { AppVariables } from "../types";
 
 const STREAM_INTERVAL_MS = 3000;
@@ -89,5 +90,11 @@ admin.post("/instances/:id/stop", async (c) => {
 
   return c.json(updated);
 });
+
+// Same noVNC/obsws proxy the end-user routes expose, just backed by the
+// ownership-free admin lookup so any admin can watch/control any instance
+// on this node, gated by the role check above rather than instance ownership.
+admin.get("/instances/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, (id) => getInstanceByIdAdmin(id)));
+admin.get("/instances/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, (id) => getInstanceByIdAdmin(id)));
 
 export default admin;
