@@ -135,6 +135,24 @@ export async function updateInstance(
   });
 }
 
+// Used by the docker event listener, which only has the container_id from
+// the Docker events stream, not the instance id or owning user.
+export async function updateInstanceByContainerId(
+  containerId: string,
+  fields: Partial<Instance>
+): Promise<Instance | null> {
+  return logged(`updateInstanceByContainerId(${containerId})`, async () => {
+    const { data, error } = await supabase
+      .from("obs_instances")
+      .update(fields)
+      .eq("container_id", containerId)
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    return data as Instance | null;
+  });
+}
+
 export async function deleteInstance(instanceId: string): Promise<void> {
   return logged(`deleteInstance(${instanceId})`, async () => {
     const { error } = await supabase.from("obs_instances").delete().eq("id", instanceId);

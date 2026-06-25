@@ -5,7 +5,7 @@ import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./lib/ws";
 import { debug, log } from "./lib/logger";
-import { reconcileContainers } from "./lib/docker";
+import { reconcileContainers, startEventListener } from "./lib/docker";
 import { NODE_ID } from "./lib/node";
 import { MAX_REQUEST_BODY_BYTES } from "./lib/constants";
 import type { AppVariables } from "./types";
@@ -70,6 +70,8 @@ const port = Number(process.env.PORT) || 3000;
 await reconcileContainers(NODE_ID).catch((err) =>
   log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),
 );
+
+startEventListener();
 
 const server = Bun.serve({
   port,
