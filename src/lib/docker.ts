@@ -1,4 +1,6 @@
 import Docker from "dockerode";
+import { debug, log } from "./logger";
+import { listNodeInstances, updateInstance } from "./supabase";
 import type { Node } from "../types";
 
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
@@ -107,7 +109,7 @@ export function instanceTarget(containerName: string, port: number): string {
   return `${containerName}:${port}`;
 }
 
-function parseShmSize(shmSize: string): number {
+export function parseShmSize(shmSize: string): number {
   const match = /^(\d+)([kmg]?)b?$/i.exec(shmSize.trim());
   if (!match) throw new Error(`Invalid shm_size: ${shmSize}`);
   const value = Number(match[1]);
@@ -131,7 +133,7 @@ export async function removeContainer(containerId: string): Promise<void> {
   await container.remove({ force: true });
 }
 
-export type DockerStatus = "running" | "stopped" | "not_found";
+export type DockerStatus = "running" | "stopped" | "not_found" | "unknown";
 
 export async function getContainerStatus(containerId: string): Promise<DockerStatus> {
   try {
@@ -140,6 +142,51 @@ export async function getContainerStatus(containerId: string): Promise<DockerSta
     return info.State.Running ? "running" : "stopped";
   } catch (err: any) {
     if (err?.statusCode === 404) return "not_found";
-    throw err;
+    // Docker daemon unreachable or some other transient failure -- don't
+    // let one bad inspect() crash the whole GET /instances listing.
+    debug("docker", `failed to inspect ${containerId}: ${err?.message ?? err}`);
+    return "unknown";
+  }
+}
+
+// Boot-time reconciliation: cross-checks running OBS containers against
+// the DB so a restarted API process doesn't operate on stale state (e.g.
+// after a crash mid-create, or a container stopped/removed out-of-band).
+export async function reconcileContainers(nodeId: string): Promise<void> {
+  const nodeInstances = await listNodeInstances(nodeId);
+  const knownContainerIds = new Set(
+    nodeInstances.map((i) => i.container_id).filter((id): id is string => !!id)
+  );
+
+  const dockerContainers = await docker.listContainers({
+    all: true,
+    filters: { name: ["obs-instance-"] },
+  });
+
+  for (const container of dockerContainers) {
+    if (!knownContainerIds.has(container.Id)) {
+      log("warn", "orphaned container with no matching DB record", {
+        containerId: container.Id,
+        names: container.Names,
+      });
+    }
+  }
+
+  for (const instance of nodeInstances) {
+    if (!instance.container_id) continue;
+
+    const status = await getContainerStatus(instance.container_id);
+    if (status === "unknown") continue;
+
+    if (status === "not_found" && instance.status !== "error") {
+      await updateInstance(instance.id, { status: "error" });
+      log("warn", "instance container missing, marked error", { instanceId: instance.id });
+    } else if (status === "running" && instance.status !== "running") {
+      await updateInstance(instance.id, { status: "running" });
+      log("info", "instance container running, resynced status", { instanceId: instance.id });
+    } else if (status === "stopped" && instance.status === "running") {
+      await updateInstance(instance.id, { status: "stopped" });
+      log("info", "instance container stopped, resynced status", { instanceId: instance.id });
+    }
   }
 }

@@ -21,3 +21,13 @@ export function debug(scope: string, message: string, data?: unknown): void {
     console.log(`${timestamp} [${scope}] ${message}`);
   }
 }
+
+// Always-on structured logging for production-grade observability (unlike
+// debug() above, this isn't gated by DEBUG). One JSON line per call so
+// log aggregators can parse level/message/meta without a custom grok pattern.
+export function log(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>): void {
+  const entry = { time: new Date().toISOString(), level, message, ...meta };
+  const line = JSON.stringify(entry);
+  if (level === "error") console.error(line);
+  else console.log(line);
+}

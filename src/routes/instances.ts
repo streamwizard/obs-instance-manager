@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { authMiddleware } from "../middleware/auth";
 import {
   countActiveInstances,
@@ -21,12 +22,37 @@ import {
   stopContainer,
 } from "../lib/docker";
 import { NODE_ID } from "../lib/node";
-import { MessageRateLimiter } from "../lib/rate-limit";
+import { KeyedRateLimiter, MessageRateLimiter } from "../lib/rate-limit";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug } from "../lib/logger";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
+const RESOLUTION_RE = /^(\d+)x(\d+)$/;
+const MAX_RESOLUTION_WIDTH = 3840;
+const MAX_RESOLUTION_HEIGHT = 2160;
+
+// Upstream connect must complete within this window or the proxy gives up
+// and closes the client side, instead of leaving it open indefinitely.
+const CONNECT_TIMEOUT_MS = 10_000;
+
+// Bounds how often one user can trigger container creation -- this is the
+// one HTTP route that's actually expensive (spins up a Docker container),
+// so it gets its own limiter rather than relying on WS-only throttling.
+const createInstanceLimiter = new KeyedRateLimiter(5, 60_000);
+
+const createInstanceSchema = z.object({
+  resolution: z
+    .string()
+    .regex(RESOLUTION_RE, "Invalid resolution format, expected WIDTHxHEIGHT")
+    .refine((val) => {
+      const match = RESOLUTION_RE.exec(val)!;
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      return width > 0 && height > 0 && width <= MAX_RESOLUTION_WIDTH && height <= MAX_RESOLUTION_HEIGHT;
+    }, `Resolution out of bounds, max ${MAX_RESOLUTION_WIDTH}x${MAX_RESOLUTION_HEIGHT}`)
+    .optional(),
+});
 
 const instances = new Hono<{ Variables: AppVariables }>();
 
@@ -73,7 +99,14 @@ export function proxyRoute(
 
         upstream = new WebSocket(`ws://${target}`);
         upstream.binaryType = "arraybuffer";
+
+        const connectTimeout = setTimeout(() => {
+          debug("ws", `${id}:${port} upstream connect timeout`);
+          ws.close(4408, "Upstream timeout");
+        }, CONNECT_TIMEOUT_MS);
+
         upstream.onopen = () => {
+          clearTimeout(connectTimeout);
           debug(
             "ws",
             `${id}:${port} upstream connected, flushing ${queued.length} queued message(s)`,
@@ -83,10 +116,12 @@ export function proxyRoute(
         };
         upstream.onmessage = (event) => ws.send(event.data);
         upstream.onclose = () => {
+          clearTimeout(connectTimeout);
           debug("ws", `${id}:${port} upstream closed`);
           ws.close();
         };
         upstream.onerror = (event) => {
+          clearTimeout(connectTimeout);
           debug("ws", `${id}:${port} upstream error`, event);
           ws.close();
         };
@@ -150,10 +185,20 @@ instances.get("/:id", async (c) => {
 
 instances.post("/", async (c) => {
   const userId = c.get("userId") as string;
+
+  if (!createInstanceLimiter.allow(userId)) {
+    return c.json({ error: "Too many instance creation requests, try again later" }, 429);
+  }
+
   const body = await c.req
     .json<CreateInstanceBody>()
     .catch(() => ({}) as CreateInstanceBody);
-  const resolution = body.resolution ?? DEFAULT_RESOLUTION;
+
+  const parsed = createInstanceSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid request body" }, 400);
+  }
+  const resolution = parsed.data.resolution ?? DEFAULT_RESOLUTION;
 
   const node = await getNode(NODE_ID);
 
@@ -184,8 +229,9 @@ instances.post("/", async (c) => {
     vram_allocated_mb: node.vram_mb,
   });
 
+  let containerId: string | null = null;
   try {
-    const containerId = await createContainer({
+    containerId = await createContainer({
       instanceId,
       containerName,
       node,
@@ -201,6 +247,11 @@ instances.post("/", async (c) => {
     return c.json(updated, 201);
   } catch (err) {
     await updateInstance(instanceId, { status: "error" });
+    if (containerId) {
+      await removeContainer(containerId).catch((e) =>
+        debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`),
+      );
+    }
     return c.json({ error: (err as Error).message }, 500);
   }
 });
@@ -243,8 +294,12 @@ instances.delete("/:id", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
   if (instance.container_id) {
-    await stopContainer(instance.container_id).catch(() => {});
-    await removeContainer(instance.container_id).catch(() => {});
+    await stopContainer(instance.container_id).catch((e) =>
+      debug("docker", `stop failed for ${id}: ${(e as Error).message}`),
+    );
+    await removeContainer(instance.container_id).catch((e) =>
+      debug("docker", `remove failed for ${id}: ${(e as Error).message}`),
+    );
   }
 
   await deleteInstance(id);

@@ -7,9 +7,8 @@ import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug } from "../lib/logger";
 import { proxyRoute } from "./instances";
+import { STREAM_INTERVAL_MS } from "../lib/constants";
 import type { AppVariables } from "../types";
-
-const STREAM_INTERVAL_MS = 3000;
 
 const admin = new Hono<{ Variables: AppVariables }>();
 
