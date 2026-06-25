@@ -4,7 +4,10 @@ import admin from "./routes/admin";
 import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./lib/ws";
-import { debug } from "./lib/logger";
+import { debug, log } from "./lib/logger";
+import { reconcileContainers } from "./lib/docker";
+import { NODE_ID } from "./lib/node";
+import { MAX_REQUEST_BODY_BYTES } from "./lib/constants";
 import type { AppVariables } from "./types";
 
 const app = new Hono<{ Variables: AppVariables }>();
@@ -41,6 +44,14 @@ app.use(
 );
 
 app.use("*", async (c, next) => {
+  const contentLength = Number(c.req.header("content-length") ?? 0);
+  if (contentLength > MAX_REQUEST_BODY_BYTES) {
+    return c.json({ error: "Request body too large" }, 413);
+  }
+  await next();
+});
+
+app.use("*", async (c, next) => {
   const start = performance.now();
   debug("http", `--> ${c.req.method} ${c.req.path}`);
   await next();
@@ -56,10 +67,23 @@ app.route("/admin", admin);
 
 const port = Number(process.env.PORT) || 3000;
 
-export default {
+await reconcileContainers(NODE_ID).catch((err) =>
+  log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),
+);
+
+const server = Bun.serve({
   port,
   fetch: app.fetch,
   websocket,
+});
+
+log("info", `OBS Panel API listening on port ${port}`);
+
+const shutdown = (signal: string) => {
+  log("info", `received ${signal}, shutting down`);
+  server.stop(true);
+  process.exit(0);
 };
 
-console.log(`OBS Panel API listening on port ${port}`);
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

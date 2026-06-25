@@ -198,6 +198,10 @@ fi
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
+log "Pre-pulling the OBS container image (multi-GB, can take a while)..."
+sudo -u "$SERVICE_USER" docker pull ghcr.io/streamwizard/obs-cloud-container:latest \
+  || warn "Pre-pull of the OBS image failed; it will be pulled on first instance creation instead."
+
 log "Building images as $SERVICE_USER..."
 sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose build"
 

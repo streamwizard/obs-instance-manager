@@ -3,10 +3,14 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "dev": "bun --hot run src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test"
+  },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/dockerode": "^4.0.1",
-    "@types/jsonwebtoken": "^9.0.10"
+    "@types/dockerode": "^4.0.1"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -16,6 +20,6 @@
     "dockerode": "^5.0.0",
     "hono": "^4.12.27",
     "jose": "^6.2.3",
-    "jsonwebtoken": "^9.0.3"
+    "zod": "^4.1.13"
   }
 }

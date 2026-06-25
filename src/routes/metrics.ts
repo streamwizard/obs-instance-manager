@@ -3,9 +3,9 @@ import { streamSSE } from "hono/streaming";
 import { authMiddleware } from "../middleware/auth";
 import { listUserInstances } from "../lib/supabase";
 import { getAllMetrics } from "../lib/metrics";
+import { STREAM_INTERVAL_MS } from "../lib/constants";
+import { debug } from "../lib/logger";
 import type { AppVariables } from "../types";
-
-const STREAM_INTERVAL_MS = 3000;
 
 const metrics = new Hono<{ Variables: AppVariables }>();
 
@@ -30,14 +30,25 @@ metrics.get("/stream", async (c) => {
     });
 
     const sendMetrics = async () => {
-      const userInstances = await listUserInstances(userId);
-      const runningInstances = userInstances.filter((i) => i.status === "running");
-      const payload = await getAllMetrics(runningInstances);
+      try {
+        const userInstances = await listUserInstances(userId);
+        const runningInstances = userInstances.filter((i) => i.status === "running");
+        const payload = await getAllMetrics(runningInstances);
 
-      await stream.writeSSE({
-        event: "metrics",
-        data: JSON.stringify(payload),
-      });
+        await stream.writeSSE({
+          event: "metrics",
+          data: JSON.stringify(payload),
+        });
+      } catch (err) {
+        debug("metrics", `stream failed for user ${userId}: ${(err as Error).message}`);
+        await stream
+          .writeSSE({
+            event: "error",
+            data: JSON.stringify({ error: "Metrics collection failed" }),
+          })
+          .catch(() => {});
+        closed = true;
+      }
     };
 
     await sendMetrics();

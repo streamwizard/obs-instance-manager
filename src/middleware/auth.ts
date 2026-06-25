@@ -1,5 +1,4 @@
 import type { Context, Next } from "hono";
-import jwt from "jsonwebtoken";
 import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from "jose";
 import type { AppVariables } from "../types";
 import { debug } from "../lib/logger";
@@ -14,11 +13,14 @@ if (!supabaseUrl) {
   throw new Error("SUPABASE_URL must be set");
 }
 
+const hsSecret = new TextEncoder().encode(jwtSecret);
+
 // Newer Supabase projects (including local dev via the CLI) sign session
 // JWTs asymmetrically (ES256) and publish the verification key over JWKS,
 // rather than the legacy shared HS256 secret. We support both: route on the
 // token's own `alg` header so older projects still on the legacy secret
-// keep working unchanged.
+// keep working unchanged. jose's jwtVerify handles both HS256 and
+// RS256/ES256, so there's no need for a separate jsonwebtoken dependency.
 const jwks = createRemoteJWKSet(new URL("/auth/v1/.well-known/jwks.json", supabaseUrl));
 
 function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
@@ -33,13 +35,14 @@ function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
   return null;
 }
 
-async function verifyToken(token: string): Promise<{ sub?: string; iss?: string }> {
+export async function verifyToken(token: string): Promise<{ sub?: string; iss?: string }> {
   const { alg } = decodeProtectedHeader(token);
   if (alg && !alg.startsWith("HS")) {
     const { payload } = await jwtVerify(token, jwks);
     return payload as { sub?: string; iss?: string };
   }
-  return jwt.verify(token, jwtSecret as string) as { sub?: string; iss?: string };
+  const { payload } = await jwtVerify(token, hsSecret);
+  return payload as { sub?: string; iss?: string };
 }
 
 export async function authMiddleware(c: Context<{ Variables: AppVariables }>, next: Next) {
