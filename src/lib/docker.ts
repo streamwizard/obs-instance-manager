@@ -1,7 +1,7 @@
 import Docker from "dockerode";
 import { debug, log } from "./logger";
-import { listNodeInstances, updateInstance } from "./supabase";
-import type { Node } from "../types";
+import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
+import type { InstanceStatus, Node } from "../types";
 
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 
@@ -188,5 +188,75 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
       await updateInstance(instance.id, { status: "stopped" });
       log("info", "instance container stopped, resynced status", { instanceId: instance.id });
     }
+  }
+}
+
+const EVENT_RECONNECT_DELAY_MS = 5000;
+
+// Live counterpart to reconcileContainers: subscribes to Docker's event
+// stream so a container that dies between reconciliation runs (crash, OOM
+// kill, manual `docker stop` outside the API) updates the DB immediately
+// instead of waiting for the next restart. Reconnects on stream errors/EOF
+// since a dropped connection would otherwise silently stop all live updates.
+export function startEventListener(): void {
+  docker.getEvents(
+    { filters: JSON.stringify({ type: ["container"], event: ["die"] }) },
+    (err, stream) => {
+      if (err || !stream) {
+        log("error", "failed to attach docker event listener, retrying", {
+          error: err?.message,
+          retryMs: EVENT_RECONNECT_DELAY_MS,
+        });
+        setTimeout(startEventListener, EVENT_RECONNECT_DELAY_MS);
+        return;
+      }
+
+      log("info", "docker event listener attached");
+
+      stream.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString("utf8").split("\n")) {
+          if (!line.trim()) continue;
+          handleContainerDieEvent(line).catch((e) =>
+            debug("docker", `failed to handle container die event: ${e?.message ?? e}`)
+          );
+        }
+      });
+
+      stream.on("error", (streamErr: Error) => {
+        log("warn", "docker event stream errored, reconnecting", {
+          error: streamErr.message,
+          retryMs: EVENT_RECONNECT_DELAY_MS,
+        });
+        setTimeout(startEventListener, EVENT_RECONNECT_DELAY_MS);
+      });
+
+      stream.on("end", () => {
+        log("warn", "docker event stream ended, reconnecting", { retryMs: EVENT_RECONNECT_DELAY_MS });
+        setTimeout(startEventListener, EVENT_RECONNECT_DELAY_MS);
+      });
+    }
+  );
+}
+
+async function handleContainerDieEvent(rawLine: string): Promise<void> {
+  const event = JSON.parse(rawLine);
+
+  const containerName: string = (event.Actor?.Attributes?.name ?? "").replace(/^\//, "");
+  if (!containerName.startsWith("obs-instance-")) return;
+
+  const containerId: string | undefined = event.Actor?.ID;
+  if (!containerId) return;
+
+  const exitCode = Number(event.Actor?.Attributes?.exitCode ?? -1);
+  const status: InstanceStatus = exitCode === 0 ? "stopped" : "error";
+
+  const updated = await updateInstanceByContainerId(containerId, { status });
+  if (updated) {
+    log("info", "instance container exited, synced status", {
+      instanceId: updated.id,
+      containerId,
+      exitCode,
+      status,
+    });
   }
 }
