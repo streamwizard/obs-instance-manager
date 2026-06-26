@@ -1,10 +1,16 @@
-import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
 import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { s3, S3_BUCKET } from "../clients/s3";
 import { debug, log } from "../utils/logger";
 
 const CONFIG_BASE = process.env.OBS_CONFIG_BASE ?? "/data/obs-configs";
+const TEMPLATES_BASE = process.env.OBS_TEMPLATES_PREFIX ?? "obs-templates/";
+const DEFAULT_TEMPLATE = process.env.OBS_DEFAULT_TEMPLATE ?? "default";
+
+function templatePrefix(template: string): string {
+  return `${TEMPLATES_BASE}${template}/`;
+}
 
 function localConfigDir(instanceId: string): string {
   return join(CONFIG_BASE, instanceId, "obs-studio");
@@ -56,22 +62,9 @@ async function listS3Objects(prefix: string): Promise<string[]> {
   return keys;
 }
 
-// Downloads the user's OBS config from S3 into the instance's local bind-mount
-// directory. If no config exists yet (new user) the directory is created empty
-// so Docker's bind mount has somewhere to write.
-export async function pullObsConfig(userId: string, instanceId: string): Promise<void> {
-  const localBase = localConfigDir(instanceId);
-  const prefix = s3Prefix(userId, instanceId);
-
+async function downloadPrefix(prefix: string, localBase: string): Promise<void> {
   const keys = await listS3Objects(prefix);
-
-  if (keys.length === 0) {
-    debug("s3", `no config in S3 for user ${userId}, starting fresh`);
-    await mkdir(localBase, { recursive: true });
-    return;
-  }
-
-  debug("s3", `pulling ${keys.length} config file(s) for user ${userId}`);
+  if (keys.length === 0) return;
 
   const baseResolved = resolve(localBase) + sep;
 
@@ -90,7 +83,34 @@ export async function pullObsConfig(userId: string, instanceId: string): Promise
       await Bun.write(localPath, await res.Body.transformToByteArray());
     })
   );
+}
 
+// Downloads the user's OBS config from S3 into the instance's local bind-mount
+// directory. Falls back to the named template for new instances so they start
+// with a proper OBS setup instead of a blank directory.
+export async function pullObsConfig(userId: string, instanceId: string, template = DEFAULT_TEMPLATE): Promise<void> {
+  const localBase = localConfigDir(instanceId);
+  const prefix = s3Prefix(userId, instanceId);
+
+  const keys = await listS3Objects(prefix);
+
+  if (keys.length === 0) {
+    await mkdir(localBase, { recursive: true });
+    const tPrefix = templatePrefix(template);
+    const templateKeys = await listS3Objects(tPrefix);
+    if (templateKeys.length > 0) {
+      debug("s3", `no config for user ${userId}, pulling template "${template}"`);
+      await downloadPrefix(tPrefix, localBase);
+      log("info", "template config pulled for new instance", { userId, instanceId, template, files: templateKeys.length });
+    } else {
+      debug("s3", `no config for user ${userId} and template "${template}" not found, starting fresh`);
+    }
+    return;
+  }
+
+  debug("s3", `pulling ${keys.length} config file(s) for user ${userId}`);
+  await mkdir(localBase, { recursive: true });
+  await downloadPrefix(prefix, localBase);
   log("info", "obs config pulled from S3", { userId, instanceId, files: keys.length });
 }
 
@@ -129,4 +149,22 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
 export async function removeLocalConfig(instanceId: string): Promise<void> {
   await rm(join(CONFIG_BASE, instanceId), { recursive: true, force: true });
   debug("s3", `removed local config dir for instance ${instanceId}`);
+}
+
+export async function removeS3Config(userId: string, instanceId: string): Promise<void> {
+  const prefix = s3Prefix(userId, instanceId);
+  const keys = await listS3Objects(prefix);
+  if (keys.length === 0) {
+    debug("s3", `no S3 config to remove for instance ${instanceId}`);
+    return;
+  }
+
+  await s3.send(
+    new DeleteObjectsCommand({
+      Bucket: S3_BUCKET,
+      Delete: { Objects: keys.map((Key) => ({ Key })) },
+    })
+  );
+
+  log("info", "obs config removed from S3", { userId, instanceId, files: keys.length });
 }

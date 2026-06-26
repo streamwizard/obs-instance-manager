@@ -27,6 +27,7 @@ export interface Instance {
 
 export interface CreateInstanceBody {
   resolution?: string;
+  template?: string;
 }
 
 export interface HostMetrics {

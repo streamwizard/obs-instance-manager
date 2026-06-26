@@ -25,7 +25,7 @@ import { NODE_ID } from "../utils/node";
 import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../services/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
 import { syncPlugins } from "../services/plugins";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
@@ -54,6 +54,7 @@ const createInstanceSchema = z.object({
       return width > 0 && height > 0 && width <= MAX_RESOLUTION_WIDTH && height <= MAX_RESOLUTION_HEIGHT;
     }, `Resolution out of bounds, max ${MAX_RESOLUTION_WIDTH}x${MAX_RESOLUTION_HEIGHT}`)
     .optional(),
+  template: z.string().min(1).optional(),
 });
 
 const instances = new Hono<{ Variables: AppVariables }>();
@@ -201,6 +202,7 @@ instances.post("/", async (c) => {
     return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid request body" }, 400);
   }
   const resolution = parsed.data.resolution ?? DEFAULT_RESOLUTION;
+  const template = parsed.data.template;
 
   const node = await getNode(NODE_ID);
 
@@ -233,7 +235,7 @@ instances.post("/", async (c) => {
 
   let containerId: string | null = null;
   try {
-    await pullObsConfig(userId, instanceId).catch((e) =>
+    await pullObsConfig(userId, instanceId, template).catch((e) =>
       log("warn", "obs config pull failed, starting with empty config", {
         instanceId,
         error: (e as Error).message,
@@ -380,6 +382,10 @@ instances.delete("/:id", async (c) => {
       debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
     );
   }
+
+  await removeS3Config(instance.user_id, instance.id).catch((e) =>
+    log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
+  );
 
   await deleteInstance(id);
 
