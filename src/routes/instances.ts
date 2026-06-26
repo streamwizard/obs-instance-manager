@@ -25,7 +25,8 @@ import { NODE_ID } from "../lib/node";
 import { KeyedRateLimiter, MessageRateLimiter } from "../lib/rate-limit";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug, log } from "../lib/logger";
-import { pullObsConfig, pushObsConfig } from "../lib/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../lib/obs-config";
+import { syncPlugins } from "../lib/plugins";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -239,6 +240,12 @@ instances.post("/", async (c) => {
       })
     );
 
+    await syncPlugins().catch((e) =>
+      log("warn", "plugin sync failed, container will use cached plugins", {
+        error: (e as Error).message,
+      })
+    );
+
     containerId = await createContainer({
       instanceId,
       containerName,
@@ -270,20 +277,43 @@ instances.post("/:id/start", async (c) => {
 
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
-  if (!instance.container_id)
-    return c.json({ error: "Instance has no container" }, 400);
+  if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
+
+  const node = await getNode(NODE_ID);
 
   await pullObsConfig(instance.user_id, instance.id).catch((e) =>
-    log("warn", "obs config pull failed, starting with existing local config", {
+    log("warn", "obs config pull failed, starting with empty config", {
       instanceId: instance.id,
       error: (e as Error).message,
     })
   );
 
-  await startContainer(instance.container_id);
-  const updated = await updateInstance(id, { status: "running" });
+  await syncPlugins().catch((e) =>
+    log("warn", "plugin sync failed, container will use cached plugins", {
+      error: (e as Error).message,
+    })
+  );
 
-  return c.json(updated);
+  let containerId: string | null = null;
+  try {
+    containerId = await createContainer({
+      instanceId: instance.id,
+      containerName: instance.container_name,
+      node,
+      resolution: instance.resolution,
+    });
+    await startContainer(containerId);
+    const updated = await updateInstance(id, { container_id: containerId, status: "running" });
+    return c.json(updated);
+  } catch (err) {
+    await updateInstance(id, { status: "error" });
+    if (containerId) {
+      await removeContainer(containerId).catch((e) =>
+        debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`)
+      );
+    }
+    return c.json({ error: (err as Error).message }, 500);
+  }
 });
 
 instances.post("/:id/stop", async (c) => {
@@ -304,7 +334,18 @@ instances.post("/:id/stop", async (c) => {
     })
   );
 
-  const updated = await updateInstance(id, { status: "stopped" });
+  await removeLocalConfig(instance.id).catch((e) =>
+    log("warn", "failed to remove local config dir after stop", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
+  await removeContainer(instance.container_id).catch((e) =>
+    debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+  );
+
+  const updated = await updateInstance(id, { container_id: null, status: "stopped" });
 
   return c.json(updated);
 });
@@ -318,7 +359,7 @@ instances.delete("/:id", async (c) => {
 
   if (instance.container_id) {
     await stopContainer(instance.container_id).catch((e) =>
-      debug("docker", `stop failed for ${id}: ${(e as Error).message}`),
+      debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
     );
 
     await pushObsConfig(instance.user_id, instance.id).catch((e) =>
@@ -328,8 +369,15 @@ instances.delete("/:id", async (c) => {
       })
     );
 
+    await removeLocalConfig(instance.id).catch((e) =>
+      log("warn", "failed to remove local config dir before delete", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    );
+
     await removeContainer(instance.container_id).catch((e) =>
-      debug("docker", `remove failed for ${id}: ${(e as Error).message}`),
+      debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
     );
   }
 
