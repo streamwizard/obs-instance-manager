@@ -14,6 +14,7 @@ services:
       - OBS_NETWORK=obs-net
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /data/obs-configs:/data/obs-configs
     gpus: all
     networks:
       - internal
