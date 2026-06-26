@@ -79,6 +79,9 @@ export async function createContainer(
       NanoCpus: Math.round(node.cpu_quota * 1_000_000_000),
       Binds: [
         `/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`,
+        ...(process.env.PLUGINS_PATH
+          ? [`${process.env.PLUGINS_PATH}:/opt/extra-plugins:ro`]
+          : []),
       ],
       DeviceRequests: [
         {
