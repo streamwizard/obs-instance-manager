@@ -1,12 +1,12 @@
 import { Hono, type Context, type Next } from "hono";
-import { getInstanceByIdAdmin, getNode, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
+import { deleteInstance, getInstanceByIdAdmin, getNode, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
 import { getAllMetrics } from "../services/metrics";
 import { createContainer, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, startContainer, stopContainer } from "../clients/docker";
 import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../services/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
 import { syncPlugins } from "../services/plugins";
 import { proxyRoute } from "./instances";
 import { STREAM_INTERVAL_MS } from "../utils/constants";
@@ -138,6 +138,45 @@ admin.post("/instances/:id/stop", async (c) => {
   const updated = await updateInstance(id, { container_id: null, status: "stopped" });
 
   return c.json(updated);
+});
+
+admin.delete("/instances/:id", async (c) => {
+  const id = c.req.param("id");
+
+  const instance = await getInstanceByIdAdmin(id);
+  if (!instance) return c.json({ error: "Instance not found" }, 404);
+
+  if (instance.container_id) {
+    await stopContainer(instance.container_id).catch((e) =>
+      debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
+    );
+
+    await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+      log("warn", "obs config push failed before delete", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    );
+
+    await removeLocalConfig(instance.id).catch((e) =>
+      log("warn", "failed to remove local config dir before delete", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    );
+
+    await removeContainer(instance.container_id).catch((e) =>
+      debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+    );
+  }
+
+  await removeS3Config(instance.user_id, instance.id).catch((e) =>
+    log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
+  );
+
+  await deleteInstance(id);
+
+  return c.json({ success: true });
 });
 
 // Same noVNC/obsws proxy the end-user routes expose, just backed by the
