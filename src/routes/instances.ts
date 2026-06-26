@@ -26,6 +26,7 @@ import { KeyedRateLimiter, MessageRateLimiter } from "../lib/rate-limit";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug, log } from "../lib/logger";
 import { pullObsConfig, pushObsConfig } from "../lib/obs-config";
+import { syncPlugins } from "../lib/plugins";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -239,6 +240,12 @@ instances.post("/", async (c) => {
       })
     );
 
+    await syncPlugins().catch((e) =>
+      log("warn", "plugin sync failed, container will use cached plugins", {
+        error: (e as Error).message,
+      })
+    );
+
     containerId = await createContainer({
       instanceId,
       containerName,
@@ -276,6 +283,12 @@ instances.post("/:id/start", async (c) => {
   await pullObsConfig(instance.user_id, instance.id).catch((e) =>
     log("warn", "obs config pull failed, starting with existing local config", {
       instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
+  await syncPlugins().catch((e) =>
+    log("warn", "plugin sync failed, container will use cached plugins", {
       error: (e as Error).message,
     })
   );
