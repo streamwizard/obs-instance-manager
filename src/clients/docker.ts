@@ -20,6 +20,10 @@ export function registerConfigHandlers(
 
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 
+// Container IDs currently being stopped via the API routes. The die event
+// handler skips its own push+cleanup for these since the API route handles it.
+const apiStoppingContainers = new Set<string>();
+
 const IMAGE = "ghcr.io/streamwizard/obs-cloud-container:latest";
 
 // Shared user-defined network joined by both the api container and every
