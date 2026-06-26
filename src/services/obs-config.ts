@@ -10,8 +10,8 @@ function localConfigDir(instanceId: string): string {
   return join(CONFIG_BASE, instanceId, "obs-studio");
 }
 
-function s3Prefix(userId: string): string {
-  return `obs-configs/${userId}/`;
+function s3Prefix(userId: string, instanceId: string): string {
+  return `obs-configs/${userId}/${instanceId}/`;
 }
 
 async function listLocalFiles(dir: string): Promise<string[]> {
@@ -61,7 +61,7 @@ async function listS3Objects(prefix: string): Promise<string[]> {
 // so Docker's bind mount has somewhere to write.
 export async function pullObsConfig(userId: string, instanceId: string): Promise<void> {
   const localBase = localConfigDir(instanceId);
-  const prefix = s3Prefix(userId);
+  const prefix = s3Prefix(userId, instanceId);
 
   const keys = await listS3Objects(prefix);
 
@@ -99,7 +99,7 @@ export async function pullObsConfig(userId: string, instanceId: string): Promise
 // files are fully flushed before we read them.
 export async function pushObsConfig(userId: string, instanceId: string): Promise<void> {
   const localBase = localConfigDir(instanceId);
-  const prefix = s3Prefix(userId);
+  const prefix = s3Prefix(userId, instanceId);
 
   const files = await listLocalFiles(localBase);
 
