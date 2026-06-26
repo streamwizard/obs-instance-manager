@@ -1,6 +1,6 @@
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
-import { mkdir, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { lstat, mkdir, readdir } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 import { s3, S3_BUCKET } from "./s3";
 import { debug, log } from "./logger";
 
@@ -23,7 +23,10 @@ async function listLocalFiles(dir: string): Promise<string[]> {
       if (entry.isDirectory()) {
         files.push(...(await listLocalFiles(fullPath)));
       } else if (entry.isFile()) {
-        files.push(fullPath);
+        // lstat confirms the path is a real file, not a symlink — a container
+        // could plant a symlink to exfiltrate arbitrary host files on push.
+        const st = await lstat(fullPath);
+        if (st.isFile()) files.push(fullPath);
       }
     }
   } catch {
@@ -70,11 +73,17 @@ export async function pullObsConfig(userId: string, instanceId: string): Promise
 
   debug("s3", `pulling ${keys.length} config file(s) for user ${userId}`);
 
+  const baseResolved = resolve(localBase) + sep;
+
   await Promise.all(
     keys.map(async (key) => {
       const rel = key.slice(prefix.length);
-      if (!rel) return; // skip bare prefix key
-      const localPath = join(localBase, rel);
+      if (!rel || rel.includes("\0")) return;
+      const localPath = resolve(localBase, rel);
+      if (!localPath.startsWith(baseResolved)) {
+        log("warn", "skipping S3 key with path traversal", { key });
+        return;
+      }
       await mkdir(localPath.substring(0, localPath.lastIndexOf("/")), { recursive: true });
       const res = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
       if (!res.Body) return;
