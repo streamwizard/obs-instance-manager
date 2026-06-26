@@ -127,7 +127,6 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
 }
 
 export async function removeLocalConfig(instanceId: string): Promise<void> {
-  const localBase = localConfigDir(instanceId);
-  await rm(localBase, { recursive: true, force: true });
+  await rm(join(CONFIG_BASE, instanceId), { recursive: true, force: true });
   debug("s3", `removed local config dir for instance ${instanceId}`);
 }
