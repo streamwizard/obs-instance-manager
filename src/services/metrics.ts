@@ -1,7 +1,7 @@
 import { getContainerCpuRam } from "./cadvisor";
 import type { ContainerMetrics, HostMetrics, Instance, MetricsPayload } from "../types";
-import { docker } from "./docker";
-import { getNode } from "./supabase";
+import { docker } from "../clients/docker";
+import { getNode } from "../clients/supabase";
 
 async function readProcStatCpuLine(): Promise<{ idle: number; total: number }> {
   const text = await Bun.file("/proc/stat").text();

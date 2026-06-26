@@ -1,6 +1,6 @@
 import Docker from "dockerode";
-import { debug, log } from "./logger";
-import { PLUGINS_LOCAL_DIR } from "./plugins";
+import { debug, log } from "../utils/logger";
+import { PLUGINS_LOCAL_DIR } from "../services/plugins";
 import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import type { InstanceStatus, Node } from "../types";
 

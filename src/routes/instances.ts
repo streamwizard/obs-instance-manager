@@ -10,7 +10,7 @@ import {
   listUserInstances,
   sumAllocatedVram,
   updateInstance,
-} from "../lib/supabase";
+} from "../clients/supabase";
 import {
   createContainer,
   getContainerStatus,
@@ -20,13 +20,13 @@ import {
   removeContainer,
   startContainer,
   stopContainer,
-} from "../lib/docker";
-import { NODE_ID } from "../lib/node";
-import { KeyedRateLimiter, MessageRateLimiter } from "../lib/rate-limit";
-import { upgradeWebSocket } from "../lib/ws";
-import { debug, log } from "../lib/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../lib/obs-config";
-import { syncPlugins } from "../lib/plugins";
+} from "../clients/docker";
+import { NODE_ID } from "../utils/node";
+import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
+import { upgradeWebSocket } from "../utils/ws";
+import { debug, log } from "../utils/logger";
+import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../services/obs-config";
+import { syncPlugins } from "../services/plugins";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";

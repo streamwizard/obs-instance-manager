@@ -1,15 +1,15 @@
 import { Hono, type Context, type Next } from "hono";
-import { getInstanceByIdAdmin, getNode, isAdmin, listNodeInstances, updateInstance } from "../lib/supabase";
-import { getAllMetrics } from "../lib/metrics";
-import { createContainer, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, startContainer, stopContainer } from "../lib/docker";
-import { NODE_ID } from "../lib/node";
+import { getInstanceByIdAdmin, getNode, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
+import { getAllMetrics } from "../services/metrics";
+import { createContainer, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, startContainer, stopContainer } from "../clients/docker";
+import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
-import { upgradeWebSocket } from "../lib/ws";
-import { debug, log } from "../lib/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../lib/obs-config";
-import { syncPlugins } from "../lib/plugins";
+import { upgradeWebSocket } from "../utils/ws";
+import { debug, log } from "../utils/logger";
+import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../services/obs-config";
+import { syncPlugins } from "../services/plugins";
 import { proxyRoute } from "./instances";
-import { STREAM_INTERVAL_MS } from "../lib/constants";
+import { STREAM_INTERVAL_MS } from "../utils/constants";
 import type { AppVariables } from "../types";
 
 const admin = new Hono<{ Variables: AppVariables }>();
