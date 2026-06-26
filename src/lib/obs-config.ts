@@ -1,5 +1,5 @@
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
-import { lstat, mkdir, readdir } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { s3, S3_BUCKET } from "./s3";
 import { debug, log } from "./logger";
@@ -124,4 +124,10 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
   );
 
   log("info", "obs config pushed to S3", { userId, instanceId, files: files.length });
+}
+
+export async function removeLocalConfig(instanceId: string): Promise<void> {
+  const localBase = localConfigDir(instanceId);
+  await rm(localBase, { recursive: true, force: true });
+  debug("s3", `removed local config dir for instance ${instanceId}`);
 }

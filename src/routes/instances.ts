@@ -25,7 +25,7 @@ import { NODE_ID } from "../lib/node";
 import { KeyedRateLimiter, MessageRateLimiter } from "../lib/rate-limit";
 import { upgradeWebSocket } from "../lib/ws";
 import { debug, log } from "../lib/logger";
-import { pullObsConfig, pushObsConfig } from "../lib/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../lib/obs-config";
 import { syncPlugins } from "../lib/plugins";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
@@ -317,6 +317,13 @@ instances.post("/:id/stop", async (c) => {
     })
   );
 
+  await removeLocalConfig(instance.id).catch((e) =>
+    log("warn", "failed to remove local config dir after stop", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
   const updated = await updateInstance(id, { status: "stopped" });
 
   return c.json(updated);
@@ -336,6 +343,13 @@ instances.delete("/:id", async (c) => {
 
     await pushObsConfig(instance.user_id, instance.id).catch((e) =>
       log("warn", "obs config push failed before delete", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    );
+
+    await removeLocalConfig(instance.id).catch((e) =>
+      log("warn", "failed to remove local config dir before delete", {
         instanceId: instance.id,
         error: (e as Error).message,
       })
