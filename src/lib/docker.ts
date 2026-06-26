@@ -78,7 +78,7 @@ export async function createContainer(
       MemorySwap: memoryBytes,
       NanoCpus: Math.round(node.cpu_quota * 1_000_000_000),
       Binds: [
-        `/data/obs-configs/${instanceId}/obs-studio:/data/obs-configs/${instanceId}/obs-studio`,
+        `/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`,
       ],
       DeviceRequests: [
         {

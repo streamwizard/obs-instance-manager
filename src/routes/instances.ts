@@ -24,7 +24,8 @@ import {
 import { NODE_ID } from "../lib/node";
 import { KeyedRateLimiter, MessageRateLimiter } from "../lib/rate-limit";
 import { upgradeWebSocket } from "../lib/ws";
-import { debug } from "../lib/logger";
+import { debug, log } from "../lib/logger";
+import { pullObsConfig, pushObsConfig } from "../lib/obs-config";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -231,6 +232,13 @@ instances.post("/", async (c) => {
 
   let containerId: string | null = null;
   try {
+    await pullObsConfig(userId, instanceId).catch((e) =>
+      log("warn", "obs config pull failed, starting with empty config", {
+        instanceId,
+        error: (e as Error).message,
+      })
+    );
+
     containerId = await createContainer({
       instanceId,
       containerName,
@@ -265,6 +273,13 @@ instances.post("/:id/start", async (c) => {
   if (!instance.container_id)
     return c.json({ error: "Instance has no container" }, 400);
 
+  await pullObsConfig(instance.user_id, instance.id).catch((e) =>
+    log("warn", "obs config pull failed, starting with existing local config", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
   await startContainer(instance.container_id);
   const updated = await updateInstance(id, { status: "running" });
 
@@ -281,6 +296,14 @@ instances.post("/:id/stop", async (c) => {
     return c.json({ error: "Instance has no container" }, 400);
 
   await stopContainer(instance.container_id);
+
+  await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+    log("warn", "obs config push failed after stop", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
   const updated = await updateInstance(id, { status: "stopped" });
 
   return c.json(updated);
@@ -297,6 +320,14 @@ instances.delete("/:id", async (c) => {
     await stopContainer(instance.container_id).catch((e) =>
       debug("docker", `stop failed for ${id}: ${(e as Error).message}`),
     );
+
+    await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+      log("warn", "obs config push failed before delete", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    );
+
     await removeContainer(instance.container_id).catch((e) =>
       debug("docker", `remove failed for ${id}: ${(e as Error).message}`),
     );
