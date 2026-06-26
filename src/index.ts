@@ -5,7 +5,8 @@ import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./lib/ws";
 import { debug, log } from "./lib/logger";
-import { reconcileContainers, startEventListener } from "./lib/docker";
+import { reconcileContainers, registerConfigHandlers, startEventListener } from "./lib/docker";
+import { pushObsConfig, removeLocalConfig } from "./lib/obs-config";
 import { checkS3 } from "./lib/s3";
 import { NODE_ID } from "./lib/node";
 import { MAX_REQUEST_BODY_BYTES } from "./lib/constants";
@@ -69,6 +70,8 @@ app.route("/admin", admin);
 const port = Number(process.env.PORT) || 3000;
 
 await checkS3();
+
+registerConfigHandlers(pushObsConfig, removeLocalConfig);
 
 await reconcileContainers(NODE_ID).catch((err) =>
   log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),

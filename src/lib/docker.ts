@@ -4,6 +4,20 @@ import { PLUGINS_LOCAL_DIR } from "./plugins";
 import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import type { InstanceStatus, Node } from "../types";
 
+// Imported lazily to avoid a circular dependency (obs-config imports s3, s3
+// imports logger, docker imports supabase — all fine, but obs-config also
+// uses docker indirectly via routes). Calling these at event-time is safe.
+let _pushObsConfig: ((userId: string, instanceId: string) => Promise<void>) | null = null;
+let _removeLocalConfig: ((instanceId: string) => Promise<void>) | null = null;
+
+export function registerConfigHandlers(
+  push: (userId: string, instanceId: string) => Promise<void>,
+  remove: (instanceId: string) => Promise<void>
+): void {
+  _pushObsConfig = push;
+  _removeLocalConfig = remove;
+}
+
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 
 const IMAGE = "ghcr.io/streamwizard/obs-cloud-container:latest";
@@ -250,15 +264,35 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
   if (!containerId) return;
 
   const exitCode = Number(event.Actor?.Attributes?.exitCode ?? -1);
-  const status: InstanceStatus = exitCode === 0 ? "stopped" : "error";
+  // 0 = clean exit, 143 = SIGTERM (docker stop), both are normal stops.
+  const status: InstanceStatus = exitCode === 0 || exitCode === 143 ? "stopped" : "error";
 
-  const updated = await updateInstanceByContainerId(containerId, { status });
-  if (updated) {
-    log("info", "instance container exited, synced status", {
-      instanceId: updated.id,
-      containerId,
-      exitCode,
-      status,
-    });
+  const updated = await updateInstanceByContainerId(containerId, { status, container_id: null });
+  if (!updated) return;
+
+  log("info", "instance container exited, synced status", {
+    instanceId: updated.id,
+    containerId,
+    exitCode,
+    status,
+  });
+
+  // Push config to S3 for containers that died out-of-band (not via the
+  // /stop route, which handles this itself). If container_id was already
+  // null the record wasn't found above, so this only runs for genuine
+  // out-of-band exits.
+  if (_pushObsConfig && _removeLocalConfig) {
+    await _pushObsConfig(updated.user_id, updated.id).catch((e) =>
+      log("warn", "obs config push failed after out-of-band container exit", {
+        instanceId: updated.id,
+        error: (e as Error).message,
+      })
+    );
+    await _removeLocalConfig(updated.id).catch((e) =>
+      log("warn", "failed to remove local config dir after out-of-band exit", {
+        instanceId: updated.id,
+        error: (e as Error).message,
+      })
+    );
   }
 }
