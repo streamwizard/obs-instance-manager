@@ -7,7 +7,6 @@ import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
-import { syncPlugins } from "../services/plugins";
 import { proxyRoute } from "./instances";
 import { STREAM_INTERVAL_MS } from "../utils/constants";
 import type { AppVariables } from "../types";
@@ -76,12 +75,6 @@ admin.post("/instances/:id/start", async (c) => {
   await pullObsConfig(instance.user_id, instance.id).catch((e) =>
     log("warn", "obs config pull failed, starting with empty config", {
       instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
-
-  await syncPlugins().catch((e) =>
-    log("warn", "plugin sync failed, container will use cached plugins", {
       error: (e as Error).message,
     })
   );

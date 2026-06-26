@@ -86,32 +86,30 @@ async function downloadPrefix(prefix: string, localBase: string): Promise<void> 
 }
 
 // Downloads the user's OBS config from S3 into the instance's local bind-mount
-// directory. Falls back to the named template for new instances so they start
-// with a proper OBS setup instead of a blank directory.
+// directory. Always applies the named template as a base layer first so shared
+// assets (plugins, default scenes, etc.) reach every instance automatically.
+// The instance's own config is then overlaid on top, so user changes always win.
 export async function pullObsConfig(userId: string, instanceId: string, template = DEFAULT_TEMPLATE): Promise<void> {
   const localBase = localConfigDir(instanceId);
-  const prefix = s3Prefix(userId, instanceId);
+  await mkdir(localBase, { recursive: true });
 
-  const keys = await listS3Objects(prefix);
-
-  if (keys.length === 0) {
-    await mkdir(localBase, { recursive: true });
-    const tPrefix = templatePrefix(template);
-    const templateKeys = await listS3Objects(tPrefix);
-    if (templateKeys.length > 0) {
-      debug("s3", `no config for user ${userId}, pulling template "${template}"`);
-      await downloadPrefix(tPrefix, localBase);
-      log("info", "template config pulled for new instance", { userId, instanceId, template, files: templateKeys.length });
-    } else {
-      debug("s3", `no config for user ${userId} and template "${template}" not found, starting fresh`);
-    }
-    return;
+  // Always apply the template as a base layer (plugins, default config, etc.)
+  const tPrefix = templatePrefix(template);
+  const templateKeys = await listS3Objects(tPrefix);
+  if (templateKeys.length > 0) {
+    await downloadPrefix(tPrefix, localBase);
+    debug("s3", `applied template "${template}" (${templateKeys.length} files) for instance ${instanceId}`);
   }
 
-  debug("s3", `pulling ${keys.length} config file(s) for user ${userId}`);
-  await mkdir(localBase, { recursive: true });
-  await downloadPrefix(prefix, localBase);
-  log("info", "obs config pulled from S3", { userId, instanceId, files: keys.length });
+  // Overlay the instance's own config on top (user changes win over template)
+  const prefix = s3Prefix(userId, instanceId);
+  const keys = await listS3Objects(prefix);
+  if (keys.length > 0) {
+    await downloadPrefix(prefix, localBase);
+    log("info", "obs config pulled from S3", { userId, instanceId, template, templateFiles: templateKeys.length, instanceFiles: keys.length });
+  } else {
+    log("info", "no instance config in S3, started from template", { userId, instanceId, template, templateFiles: templateKeys.length });
+  }
 }
 
 // Uploads the instance's local OBS config to S3 under the user's key so it

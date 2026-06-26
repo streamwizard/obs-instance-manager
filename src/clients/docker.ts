@@ -1,6 +1,5 @@
 import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
-import { PLUGINS_LOCAL_DIR } from "../services/plugins";
 import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import type { InstanceStatus, Node } from "../types";
 
@@ -96,10 +95,7 @@ export async function createContainer(
       MemoryReservation: memoryBytes,
       MemorySwap: memoryBytes,
       NanoCpus: Math.round(node.cpu_quota * 1_000_000_000),
-      Binds: [
-        `/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`,
-        `${PLUGINS_LOCAL_DIR}:/opt/extra-plugins:ro`,
-      ],
+      Binds: [`/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`],
       DeviceRequests: [
         {
           Driver: "nvidia",
