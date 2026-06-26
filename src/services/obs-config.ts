@@ -1,4 +1,4 @@
-import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
 import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { s3, S3_BUCKET } from "../clients/s3";
@@ -159,11 +159,8 @@ export async function removeS3Config(userId: string, instanceId: string): Promis
     return;
   }
 
-  await s3.send(
-    new DeleteObjectsCommand({
-      Bucket: S3_BUCKET,
-      Delete: { Objects: keys.map((Key) => ({ Key })) },
-    })
+  await Promise.all(
+    keys.map((Key) => s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key })))
   );
 
   log("info", "obs config removed from S3", { userId, instanceId, files: keys.length });
