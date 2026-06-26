@@ -1,8 +1,8 @@
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
 import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
-import { s3, S3_BUCKET } from "./s3";
-import { debug, log } from "./logger";
+import { s3, S3_BUCKET } from "../clients/s3";
+import { debug, log } from "../utils/logger";
 
 const CONFIG_BASE = process.env.OBS_CONFIG_BASE ?? "/data/obs-configs";
 

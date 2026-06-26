@@ -1,13 +1,15 @@
 import { Hono, type Context, type Next } from "hono";
-import { getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../lib/supabase";
-import { getAllMetrics } from "../lib/metrics";
-import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, startContainer, stopContainer } from "../lib/docker";
-import { NODE_ID } from "../lib/node";
+import { getInstanceByIdAdmin, getNode, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
+import { getAllMetrics } from "../services/metrics";
+import { createContainer, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, startContainer, stopContainer } from "../clients/docker";
+import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
-import { upgradeWebSocket } from "../lib/ws";
-import { debug } from "../lib/logger";
+import { upgradeWebSocket } from "../utils/ws";
+import { debug, log } from "../utils/logger";
+import { pullObsConfig, pushObsConfig, removeLocalConfig } from "../services/obs-config";
+import { syncPlugins } from "../services/plugins";
 import { proxyRoute } from "./instances";
-import { STREAM_INTERVAL_MS } from "../lib/constants";
+import { STREAM_INTERVAL_MS } from "../utils/constants";
 import type { AppVariables } from "../types";
 
 const admin = new Hono<{ Variables: AppVariables }>();
@@ -67,13 +69,43 @@ admin.post("/instances/:id/start", async (c) => {
 
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
-  if (!instance.container_id)
-    return c.json({ error: "Instance has no container" }, 400);
+  if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
 
-  await startContainer(instance.container_id);
-  const updated = await updateInstance(id, { status: "running" });
+  const node = await getNode(NODE_ID);
 
-  return c.json(updated);
+  await pullObsConfig(instance.user_id, instance.id).catch((e) =>
+    log("warn", "obs config pull failed, starting with empty config", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
+  await syncPlugins().catch((e) =>
+    log("warn", "plugin sync failed, container will use cached plugins", {
+      error: (e as Error).message,
+    })
+  );
+
+  let containerId: string | null = null;
+  try {
+    containerId = await createContainer({
+      instanceId: instance.id,
+      containerName: instance.container_name,
+      node,
+      resolution: instance.resolution,
+    });
+    await startContainer(containerId);
+    const updated = await updateInstance(id, { container_id: containerId, status: "running" });
+    return c.json(updated);
+  } catch (err) {
+    await updateInstance(id, { status: "error" });
+    if (containerId) {
+      await removeContainer(containerId).catch((e) =>
+        debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`)
+      );
+    }
+    return c.json({ error: (err as Error).message }, 500);
+  }
 });
 
 admin.post("/instances/:id/stop", async (c) => {
@@ -81,11 +113,29 @@ admin.post("/instances/:id/stop", async (c) => {
 
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
-  if (!instance.container_id)
-    return c.json({ error: "Instance has no container" }, 400);
+  if (!instance.container_id) return c.json({ error: "Instance has no container" }, 400);
 
   await stopContainer(instance.container_id);
-  const updated = await updateInstance(id, { status: "stopped" });
+
+  await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+    log("warn", "obs config push failed after stop", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
+  await removeLocalConfig(instance.id).catch((e) =>
+    log("warn", "failed to remove local config dir after stop", {
+      instanceId: instance.id,
+      error: (e as Error).message,
+    })
+  );
+
+  await removeContainer(instance.container_id).catch((e) =>
+    debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+  );
+
+  const updated = await updateInstance(id, { container_id: null, status: "stopped" });
 
   return c.json(updated);
 });

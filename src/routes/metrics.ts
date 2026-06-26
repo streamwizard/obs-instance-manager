@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { authMiddleware } from "../middleware/auth";
-import { listUserInstances } from "../lib/supabase";
-import { getAllMetrics } from "../lib/metrics";
-import { STREAM_INTERVAL_MS } from "../lib/constants";
-import { debug } from "../lib/logger";
+import { listUserInstances } from "../clients/supabase";
+import { getAllMetrics } from "../services/metrics";
+import { STREAM_INTERVAL_MS } from "../utils/constants";
+import { debug } from "../utils/logger";
 import type { AppVariables } from "../types";
 
 const metrics = new Hono<{ Variables: AppVariables }>();

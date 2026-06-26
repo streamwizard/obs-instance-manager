@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { debug } from "./logger";
+import { debug } from "../utils/logger";
 import type { Instance, InstanceStatus, Node } from "../types";
 
 const supabaseUrl = process.env.SUPABASE_URL;

@@ -1,7 +1,7 @@
 import type { Context, Next } from "hono";
 import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from "jose";
 import type { AppVariables } from "../types";
-import { debug } from "../lib/logger";
+import { debug } from "../utils/logger";
 
 const jwtSecret = process.env.SUPABASE_JWT_SECRET;
 const supabaseUrl = process.env.SUPABASE_URL;

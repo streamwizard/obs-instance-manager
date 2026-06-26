@@ -1,8 +1,8 @@
 import { GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { s3, S3_BUCKET } from "./s3";
-import { debug, log } from "./logger";
+import { s3, S3_BUCKET } from "../clients/s3";
+import { debug, log } from "../utils/logger";
 
 const PLUGINS_PREFIX = "plugins/";
 const ETAG_CACHE_FILE = ".etags.json";
