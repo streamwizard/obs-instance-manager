@@ -6,6 +6,7 @@ import metrics from "./routes/metrics";
 import { websocket } from "./lib/ws";
 import { debug, log } from "./lib/logger";
 import { reconcileContainers, startEventListener } from "./lib/docker";
+import { checkS3 } from "./lib/s3";
 import { NODE_ID } from "./lib/node";
 import { MAX_REQUEST_BODY_BYTES } from "./lib/constants";
 import type { AppVariables } from "./types";
@@ -66,6 +67,8 @@ app.route("/metrics", metrics);
 app.route("/admin", admin);
 
 const port = Number(process.env.PORT) || 3000;
+
+await checkS3();
 
 await reconcileContainers(NODE_ID).catch((err) =>
   log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),
