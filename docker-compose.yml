@@ -15,6 +15,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /data/obs-configs:/data/obs-configs
+      - /data/obs-plugins:/data/obs-plugins
     gpus: all
     networks:
       - internal
