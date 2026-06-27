@@ -4,6 +4,8 @@ import { join, relative, resolve, sep } from "node:path";
 import { s3, S3_BUCKET } from "../clients/s3";
 import { debug, log } from "../utils/logger";
 
+const PROFILE_NAME = "StreamWizard";
+
 const CONFIG_BASE = process.env.OBS_CONFIG_BASE ?? "/data/obs-configs";
 const TEMPLATES_BASE = process.env.OBS_TEMPLATES_PREFIX ?? "obs-templates/";
 const DEFAULT_TEMPLATE = process.env.OBS_DEFAULT_TEMPLATE ?? "default";
@@ -147,6 +149,62 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
 export async function removeLocalConfig(instanceId: string): Promise<void> {
   await rm(join(CONFIG_BASE, instanceId), { recursive: true, force: true });
   debug("s3", `removed local config dir for instance ${instanceId}`);
+}
+
+function serviceJsonPath(instanceId: string): string {
+  return join(localConfigDir(instanceId), "basic", "profiles", PROFILE_NAME, "service.json");
+}
+
+// Writes the Twitch stream key into the instance's service.json so OBS starts
+// with it pre-populated. Called after pullObsConfig so the file exists on disk.
+// Non-fatal: if the file is missing or malformed we skip silently.
+export async function injectStreamKey(instanceId: string, key: string): Promise<void> {
+  const path = serviceJsonPath(instanceId);
+  let raw: string;
+  try {
+    raw = await Bun.file(path).text();
+  } catch {
+    log("warn", "service.json not found after config pull, skipping stream key injection", { instanceId });
+    return;
+  }
+
+  let cfg: any;
+  try {
+    cfg = JSON.parse(raw);
+  } catch {
+    log("warn", "service.json is not valid JSON, skipping stream key injection", { instanceId });
+    return;
+  }
+
+  cfg.settings ??= {};
+  cfg.settings.key = key;
+
+  await Bun.write(path, JSON.stringify(cfg, null, 4));
+  debug("obs-config", `stream key injected into service.json for instance ${instanceId}`);
+}
+
+// Clears the stream key from service.json before pushing config to S3 so the
+// key is never persisted to storage.
+export async function clearStreamKey(instanceId: string): Promise<void> {
+  const path = serviceJsonPath(instanceId);
+  let raw: string;
+  try {
+    raw = await Bun.file(path).text();
+  } catch {
+    return; // file may not exist if the container never wrote it back
+  }
+
+  let cfg: any;
+  try {
+    cfg = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  if (cfg.settings) cfg.settings.key = "";
+
+  await Bun.write(path, JSON.stringify(cfg, null, 4));
+  debug("obs-config", `stream key cleared from service.json for instance ${instanceId}`);
 }
 
 export async function removeS3Config(userId: string, instanceId: string): Promise<void> {

@@ -25,7 +25,8 @@ import { NODE_ID } from "../utils/node";
 import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey } from "../services/obs-config";
+import { getStreamKey } from "../services/twitch";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -241,6 +242,9 @@ instances.post("/", async (c) => {
       })
     );
 
+    const streamKey = await getStreamKey(userId);
+    if (streamKey) await injectStreamKey(instanceId, streamKey);
+
     containerId = await createContainer({
       instanceId,
       containerName,
@@ -283,6 +287,9 @@ instances.post("/:id/start", async (c) => {
     })
   );
 
+  const streamKey = await getStreamKey(instance.user_id);
+  if (streamKey) await injectStreamKey(instance.id, streamKey);
+
   let containerId: string | null = null;
   try {
     containerId = await createContainer({
@@ -315,6 +322,10 @@ instances.post("/:id/stop", async (c) => {
     return c.json({ error: "Instance has no container" }, 400);
 
   await stopContainer(instance.container_id);
+
+  await clearStreamKey(instance.id).catch((e) =>
+    log("warn", "failed to clear stream key before push", { instanceId: instance.id, error: (e as Error).message })
+  );
 
   await pushObsConfig(instance.user_id, instance.id).catch((e) =>
     log("warn", "obs config push failed after stop", {
@@ -349,6 +360,10 @@ instances.delete("/:id", async (c) => {
   if (instance.container_id) {
     await stopContainer(instance.container_id).catch((e) =>
       debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
+    );
+
+    await clearStreamKey(instance.id).catch((e) =>
+      log("warn", "failed to clear stream key before delete push", { instanceId: instance.id, error: (e as Error).message })
     );
 
     await pushObsConfig(instance.user_id, instance.id).catch((e) =>
