@@ -32,6 +32,9 @@ export interface CreateInstanceBody {
   resolution?: string;
   template?: string;
   obs_ws_password?: string;
+  obs_ws_password_ciphertext?: string;
+  obs_ws_password_iv?: string;
+  obs_ws_password_tag?: string;
 }
 
 export interface HostMetrics {

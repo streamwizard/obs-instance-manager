@@ -57,6 +57,9 @@ const createInstanceSchema = z.object({
     .optional(),
   template: z.string().min(1).optional(),
   obs_ws_password: z.string().min(1).optional(),
+  obs_ws_password_ciphertext: z.string().min(1).optional(),
+  obs_ws_password_iv: z.string().min(1).optional(),
+  obs_ws_password_tag: z.string().min(1).optional(),
 });
 
 const instances = new Hono<{ Variables: AppVariables }>();
@@ -206,6 +209,9 @@ instances.post("/", async (c) => {
   const resolution = parsed.data.resolution ?? DEFAULT_RESOLUTION;
   const template = parsed.data.template;
   const obsWsPassword = parsed.data.obs_ws_password;
+  const obsWsPasswordCiphertext = parsed.data.obs_ws_password_ciphertext ?? null;
+  const obsWsPasswordIv = parsed.data.obs_ws_password_iv ?? null;
+  const obsWsPasswordTag = parsed.data.obs_ws_password_tag ?? null;
 
   if (!obsWsPassword) {
     return c.json({ error: "obs_ws_password is required" }, 400);
@@ -238,9 +244,9 @@ instances.post("/", async (c) => {
     resolution,
     status: "creating",
     vram_allocated_mb: node.vram_mb,
-    obs_ws_password_ciphertext: null,
-    obs_ws_password_iv: null,
-    obs_ws_password_tag: null,
+    obs_ws_password_ciphertext: obsWsPasswordCiphertext,
+    obs_ws_password_iv: obsWsPasswordIv,
+    obs_ws_password_tag: obsWsPasswordTag,
   });
 
   let containerId: string | null = null;
