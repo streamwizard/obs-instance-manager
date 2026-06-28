@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import admin from "./routes/admin";
+import admin, { notifyMetricsDrain } from "./routes/admin";
 import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
@@ -87,11 +87,21 @@ const server = Bun.serve({
 
 log("info", `OBS Panel API listening on port ${port}`);
 
-const shutdown = (signal: string) => {
-  log("info", `received ${signal}, shutting down`);
+// Grace window between telling metrics clients to reconnect and actually
+// tearing the server down, so they can re-dial (to this or a replacement node)
+// before their current socket dies -- Twitch EventSub-style graceful drain.
+const DRAIN_GRACE_MS = 5000;
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log("info", `received ${signal}, draining metrics clients then shutting down`);
+  notifyMetricsDrain("/admin/metrics/stream");
+  await new Promise((resolve) => setTimeout(resolve, DRAIN_GRACE_MS));
   server.stop(true);
   process.exit(0);
 };
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

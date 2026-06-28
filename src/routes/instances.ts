@@ -28,6 +28,7 @@ import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
 import { decryptPassword } from "../utils/crypto";
 import { getStreamKey } from "../services/twitch";
+import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 const DEFAULT_RESOLUTION = "1920x1080";
@@ -64,7 +65,43 @@ const createInstanceSchema = z.object({
 
 const instances = new Hono<{ Variables: AppVariables }>();
 
+// Bounds ws-ticket minting per user. Tickets are cheap to issue, but there's
+// no reason to let one caller flood the store.
+const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
+
+// The WS proxy upgrades authenticate via single-use ws-tickets consumed inside
+// proxyRoute -- NOT the JWT authMiddleware below. Browsers can't set an
+// Authorization header on a WS upgrade, so these are registered before the
+// middleware: the upgrade handler runs first and never calls next(), so the
+// JWT check is skipped for them while every REST route still goes through it.
+instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
+instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id, ticket) => getInstanceById(id, ticket.userId)));
+
 instances.use("*", authMiddleware);
+
+// Mints a short-lived, single-use ticket that the browser then puts on the WS
+// URL (?ticket=...). Ownership is enforced here while the JWT is still in the
+// Authorization header, so the powerful credential never rides on the socket.
+instances.post("/:id/ws-ticket", async (c) => {
+  const userId = c.get("userId") as string;
+  const id = c.req.param("id");
+
+  if (!wsTicketLimiter.allow(userId)) {
+    return c.json({ error: "Too many ticket requests, try again later" }, 429);
+  }
+
+  const body = await c.req.json<{ scope?: string }>().catch(() => ({}) as { scope?: string });
+  const scope = body.scope;
+  if (scope !== "novnc" && scope !== "obsws") {
+    return c.json({ error: "Invalid scope" }, 400);
+  }
+
+  const instance = await getInstanceById(id, userId);
+  if (!instance) return c.json({ error: "Instance not found" }, 404);
+
+  const ticket = issueTicket({ userId, scope, instanceId: id });
+  return c.json({ ticket, expires_in: 30 });
+});
 
 // Bridges a browser websocket connection to an instance container's internal
 // noVNC/obs-websocket port over the shared `obs-net` Docker network. Instance
@@ -76,16 +113,22 @@ instances.use("*", authMiddleware);
 // unlike sparse OBS control commands.
 //
 // getInstance is pluggable so the admin routes can reuse this proxy with an
-// ownership-free lookup (getInstanceByIdAdmin) instead of the end-user one.
+// ownership-free lookup (getInstanceByIdAdmin) instead of the end-user one. The
+// resolved ticket is passed through so the end-user variant can still scope the
+// lookup to the ticket's owner.
 export function proxyRoute(
   port: number,
   messagesPerWindow: number,
-  getInstance: (id: string, c: any) => Promise<{ container_name: string } | null>,
+  scope: TicketScope,
+  getInstance: (id: string, ticket: Ticket) => Promise<{ container_name: string } | null>,
   windowMs = 200,
 ) {
   return upgradeWebSocket(async (c) => {
     const id = c.req.param("id") as string;
-    const instance = await getInstance(id, c);
+    // Single-use ticket consumed here (not the JWT) -- see the route comment in
+    // this file. A null ticket means missing/expired/replayed/wrong-scope.
+    const ticket = consumeTicket(c.req.query("ticket"), scope, id);
+    const instance = ticket ? await getInstance(id, ticket) : null;
     const limiter = new MessageRateLimiter(messagesPerWindow, windowMs);
 
     let upstream: WebSocket | null = null;
@@ -93,6 +136,11 @@ export function proxyRoute(
 
     return {
       onOpen(_event, ws) {
+        if (!ticket) {
+          debug("ws", `${id}:${port} rejected, invalid ticket`);
+          ws.close(4401, "Invalid ticket");
+          return;
+        }
         if (!instance) {
           debug("ws", `${id}:${port} rejected, instance not found`);
           ws.close(4404, "Instance not found");
@@ -154,12 +202,6 @@ export function proxyRoute(
     };
   });
 }
-
-const getOwnedInstance = (id: string, c: any) =>
-  getInstanceById(id, c.get("userId") as string);
-
-instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, getOwnedInstance));
-instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, getOwnedInstance));
 
 instances.get("/", async (c) => {
   const userId = c.get("userId") as string;
