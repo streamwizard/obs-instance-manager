@@ -23,15 +23,14 @@ const hsSecret = new TextEncoder().encode(jwtSecret);
 // RS256/ES256, so there's no need for a separate jsonwebtoken dependency.
 const jwks = createRemoteJWKSet(new URL("/auth/v1/.well-known/jwks.json", supabaseUrl));
 
+// JWT only ever arrives in the Authorization header. WebSocket upgrades (which
+// can't set headers) authenticate with single-use ws-tickets instead -- see
+// services/ws-tickets.ts -- so there's deliberately no query-param token path.
 function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
   const header = c.req.header("Authorization");
   if (header?.startsWith("Bearer ")) {
     return header.slice("Bearer ".length);
   }
-
-  const queryToken = c.req.query("token");
-  if (queryToken) return queryToken;
-
   return null;
 }
 
