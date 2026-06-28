@@ -26,6 +26,7 @@ import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey } from "../services/obs-config";
+import { decryptPassword } from "../utils/crypto";
 import { getStreamKey } from "../services/twitch";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
@@ -55,6 +56,7 @@ const createInstanceSchema = z.object({
     }, `Resolution out of bounds, max ${MAX_RESOLUTION_WIDTH}x${MAX_RESOLUTION_HEIGHT}`)
     .optional(),
   template: z.string().min(1).optional(),
+  obs_ws_password: z.string().min(1).optional(),
 });
 
 const instances = new Hono<{ Variables: AppVariables }>();
@@ -203,6 +205,11 @@ instances.post("/", async (c) => {
   }
   const resolution = parsed.data.resolution ?? DEFAULT_RESOLUTION;
   const template = parsed.data.template;
+  const obsWsPassword = parsed.data.obs_ws_password;
+
+  if (!obsWsPassword) {
+    return c.json({ error: "obs_ws_password is required" }, 400);
+  }
 
   const node = await getNode(NODE_ID);
 
@@ -231,6 +238,9 @@ instances.post("/", async (c) => {
     resolution,
     status: "creating",
     vram_allocated_mb: node.vram_mb,
+    obs_ws_password_ciphertext: null,
+    obs_ws_password_iv: null,
+    obs_ws_password_tag: null,
   });
 
   let containerId: string | null = null;
@@ -250,6 +260,7 @@ instances.post("/", async (c) => {
       containerName,
       node,
       resolution,
+      obsWsPassword,
     });
     await startContainer(containerId);
 
@@ -290,6 +301,16 @@ instances.post("/:id/start", async (c) => {
   const streamKey = await getStreamKey(instance.user_id);
   if (streamKey) await injectStreamKey(instance.id, streamKey);
 
+  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
+    return c.json({ error: "Instance is missing OBS WebSocket password." }, 500);
+  }
+
+  const obsWsPassword = decryptPassword(
+    instance.obs_ws_password_ciphertext,
+    instance.obs_ws_password_iv,
+    instance.obs_ws_password_tag,
+  );
+
   let containerId: string | null = null;
   try {
     containerId = await createContainer({
@@ -297,6 +318,7 @@ instances.post("/:id/start", async (c) => {
       containerName: instance.container_name,
       node,
       resolution: instance.resolution,
+      obsWsPassword,
     });
     await startContainer(containerId);
     const updated = await updateInstance(id, { container_id: containerId, status: "running" });

@@ -22,12 +22,16 @@ export interface Instance {
   resolution: string;
   status: InstanceStatus;
   vram_allocated_mb: number;
+  obs_ws_password_ciphertext: string | null;
+  obs_ws_password_iv: string | null;
+  obs_ws_password_tag: string | null;
   created_at: string;
 }
 
 export interface CreateInstanceBody {
   resolution?: string;
   template?: string;
+  obs_ws_password?: string;
 }
 
 export interface HostMetrics {

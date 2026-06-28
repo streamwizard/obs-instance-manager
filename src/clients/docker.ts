@@ -53,12 +53,13 @@ export interface CreateContainerOptions {
   containerName: string;
   node: Node;
   resolution: string;
+  obsWsPassword: string;
 }
 
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
-  const { instanceId, containerName, node, resolution } = opts;
+  const { instanceId, containerName, node, resolution, obsWsPassword } = opts;
 
   await ensureImagePulled(IMAGE);
 
@@ -73,6 +74,7 @@ export async function createContainer(
       `VNC_PORT=${VNC_PORT_INTERNAL}`,
       `NOVNC_PORT=${NOVNC_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
+      `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
       `DISPLAY_NUM=:0`,
     ],
     HostConfig: {

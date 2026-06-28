@@ -7,6 +7,7 @@ import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
+import { decryptPassword } from "../utils/crypto";
 import { proxyRoute } from "./instances";
 import { STREAM_INTERVAL_MS } from "../utils/constants";
 import type { AppVariables } from "../types";
@@ -79,6 +80,15 @@ admin.post("/instances/:id/start", async (c) => {
     })
   );
 
+  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
+    return c.json({ error: "Instance is missing OBS WebSocket password." }, 500);
+  }
+  const obsWsPassword = decryptPassword(
+    instance.obs_ws_password_ciphertext,
+    instance.obs_ws_password_iv,
+    instance.obs_ws_password_tag,
+  );
+
   let containerId: string | null = null;
   try {
     containerId = await createContainer({
@@ -86,6 +96,7 @@ admin.post("/instances/:id/start", async (c) => {
       containerName: instance.container_name,
       node,
       resolution: instance.resolution,
+      obsWsPassword,
     });
     await startContainer(containerId);
     const updated = await updateInstance(id, { container_id: containerId, status: "running" });
