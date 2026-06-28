@@ -25,7 +25,7 @@ import { NODE_ID } from "../utils/node";
 import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey } from "../services/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
 import { decryptPassword } from "../utils/crypto";
 import { getStreamKey } from "../services/twitch";
 import type { AppVariables, CreateInstanceBody } from "../types";
@@ -252,6 +252,8 @@ instances.post("/", async (c) => {
       })
     );
 
+    await injectObsWsPassword(instanceId, obsWsPassword);
+
     const streamKey = await getStreamKey(userId);
     if (streamKey) await injectStreamKey(instanceId, streamKey);
 
@@ -298,9 +300,6 @@ instances.post("/:id/start", async (c) => {
     })
   );
 
-  const streamKey = await getStreamKey(instance.user_id);
-  if (streamKey) await injectStreamKey(instance.id, streamKey);
-
   if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
     return c.json({ error: "Instance is missing OBS WebSocket password." }, 500);
   }
@@ -310,6 +309,11 @@ instances.post("/:id/start", async (c) => {
     instance.obs_ws_password_iv,
     instance.obs_ws_password_tag,
   );
+
+  await injectObsWsPassword(instance.id, obsWsPassword);
+
+  const streamKey = await getStreamKey(instance.user_id);
+  if (streamKey) await injectStreamKey(instance.id, streamKey);
 
   let containerId: string | null = null;
   try {

@@ -155,6 +155,37 @@ function serviceJsonPath(instanceId: string): string {
   return join(localConfigDir(instanceId), "basic", "profiles", PROFILE_NAME, "service.json");
 }
 
+function obsWsConfigPath(instanceId: string): string {
+  return join(localConfigDir(instanceId), "plugin_config", "obs-websocket", "config.json");
+}
+
+// Writes our generated password into the obs-websocket config.json after
+// pullObsConfig runs. The entrypoint only seeds that file when it doesn't
+// exist; if S3 already had one (with a different password) the entrypoint
+// would silently ignore OBS_WEBSOCKET_PASSWORD. Patching here ensures the
+// password we stored in the DB is always the one OBS actually uses.
+export async function injectObsWsPassword(instanceId: string, password: string): Promise<void> {
+  const path = obsWsConfigPath(instanceId);
+  await mkdir(path.substring(0, path.lastIndexOf("/")), { recursive: true });
+
+  let cfg: Record<string, unknown> = {};
+  try {
+    cfg = JSON.parse(await Bun.file(path).text());
+  } catch {
+    // no existing config — start fresh
+  }
+
+  cfg.server_enabled = true;
+  cfg.auth_required = true;
+  cfg.server_password = password;
+  cfg.first_load = false;
+  cfg.alerts_enabled = cfg.alerts_enabled ?? false;
+  cfg.server_port = cfg.server_port ?? Number(process.env.OBS_WEBSOCKET_PORT ?? 4455);
+
+  await Bun.write(path, JSON.stringify(cfg, null, 4));
+  debug("obs-config", `obs-websocket password injected for instance ${instanceId}`);
+}
+
 // Writes the Twitch stream key into the instance's service.json so OBS starts
 // with it pre-populated. Called after pullObsConfig so the file exists on disk.
 // Non-fatal: if the file is missing or malformed we skip silently.

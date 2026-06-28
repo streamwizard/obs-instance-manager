@@ -6,7 +6,7 @@ import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
+import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectObsWsPassword } from "../services/obs-config";
 import { decryptPassword } from "../utils/crypto";
 import { proxyRoute } from "./instances";
 import { STREAM_INTERVAL_MS } from "../utils/constants";
@@ -88,6 +88,8 @@ admin.post("/instances/:id/start", async (c) => {
     instance.obs_ws_password_iv,
     instance.obs_ws_password_tag,
   );
+
+  await injectObsWsPassword(instance.id, obsWsPassword);
 
   let containerId: string | null = null;
   try {
