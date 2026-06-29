@@ -96,13 +96,18 @@ export async function createContainer(
       Memory: memoryBytes,
       MemoryReservation: memoryBytes,
       MemorySwap: memoryBytes,
-      NanoCpus: Math.round(node.cpu_quota * 1_000_000_000),
+
+      // 1. Give the stream engine breathing room if it's struggling on start
+      NanoCpus: Math.round(node.cpu_quota * 1000000000),
+
       Binds: [`/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`],
+
       DeviceRequests: [
         {
           Driver: "nvidia",
           Count: -1,
-          Capabilities: [["gpu", "utility", "video", "display"]],
+          // FIX: Wrap the strings in a nested array to satisfy the string[][] type definition
+          Capabilities: [["gpu", "utility", "video", "display"]], 
         },
       ],
     },
