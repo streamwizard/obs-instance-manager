@@ -102,7 +102,7 @@ export async function createContainer(
         {
           Driver: "nvidia",
           Count: -1,
-          Capabilities: [["gpu"]],
+          Capabilities: [["gpu", "utility", "video", "display"]],
         },
       ],
     },
