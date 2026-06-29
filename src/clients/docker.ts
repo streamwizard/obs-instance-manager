@@ -76,6 +76,7 @@ export async function createContainer(
       `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
       `DISPLAY_NUM=:0`,
+      `OBS_BROWSER_ARGS=--no-sandbox --disable-gpu-sandbox`,
     ],
     HostConfig: {
       Runtime: "nvidia",
