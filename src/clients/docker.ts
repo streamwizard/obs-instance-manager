@@ -1,6 +1,7 @@
 import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
 import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
+import { StreamwizardApi } from "./streamwizard-api";
 import type { InstanceStatus, Node } from "../types";
 
 // Imported lazily to avoid a circular dependency (obs-config imports s3, s3
@@ -173,6 +174,11 @@ export async function getContainerStatus(containerId: string): Promise<DockerSta
   }
 }
 
+export interface ReconcileInstanceResult {
+  instance_id: string;
+  action: "marked_error" | "marked_running" | "marked_stopped" | "no_change";
+}
+
 // Boot-time reconciliation: cross-checks running OBS containers against
 // the DB so a restarted API process doesn't operate on stale state (e.g.
 // after a crash mid-create, or a container stopped/removed out-of-band).
@@ -187,14 +193,19 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
     filters: { name: ["obs-instance-"] },
   });
 
+  const orphanedContainers: string[] = [];
+
   for (const container of dockerContainers) {
     if (!knownContainerIds.has(container.Id)) {
       log("warn", "orphaned container with no matching DB record", {
         containerId: container.Id,
         names: container.Names,
       });
+      orphanedContainers.push(container.Id);
     }
   }
+
+  const instanceResults: ReconcileInstanceResult[] = [];
 
   for (const instance of nodeInstances) {
     if (!instance.container_id) continue;
@@ -205,13 +216,41 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
     if (status === "not_found" && instance.status !== "error") {
       await updateInstance(instance.id, { status: "error" });
       log("warn", "instance container missing, marked error", { instanceId: instance.id });
+      instanceResults.push({ instance_id: instance.id, action: "marked_error" });
     } else if (status === "running" && instance.status !== "running") {
       await updateInstance(instance.id, { status: "running" });
       log("info", "instance container running, resynced status", { instanceId: instance.id });
+      instanceResults.push({ instance_id: instance.id, action: "marked_running" });
     } else if (status === "stopped" && instance.status === "running") {
       await updateInstance(instance.id, { status: "stopped" });
       log("info", "instance container stopped, resynced status", { instanceId: instance.id });
+      instanceResults.push({ instance_id: instance.id, action: "marked_stopped" });
+    } else {
+      instanceResults.push({ instance_id: instance.id, action: "no_change" });
     }
+  }
+
+  await reportReconcile(nodeId, orphanedContainers, instanceResults);
+}
+
+async function reportReconcile(
+  nodeId: string,
+  orphanedContainers: string[],
+  instances: ReconcileInstanceResult[]
+): Promise<void> {
+  if (!process.env.REST_API_URL) {
+    debug("reconcile", "REST_API_URL not set, skipping reconcile report");
+    return;
+  }
+
+  try {
+    await StreamwizardApi.post("/api/nodes/reconcile", {
+      reconciled_at: new Date().toISOString(),
+      orphaned_containers: orphanedContainers,
+      instances,
+    });
+  } catch {
+    // error already logged by the response interceptor
   }
 }
 
