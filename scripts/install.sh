@@ -183,8 +183,22 @@ with open(env_path, "w") as f:
     f.write(f"NODE_API_KEY={data['node_api_key']}\n")
     f.write(f"REST_API_URL={data['rest_api_url']}\n")
     f.write(f"SUPABASE_URL={data['supabase_url']}\n")
+    f.write(f"S3_ENDPOINT={data['S3_ENDPOINT']}\n")
+    f.write(f"S3_ACCESS_KEY={data['S3_ACCESS_KEY']}\n")
+    f.write(f"S3_SECRET_KEY={data['S3_SECRET_KEY']}\n")
+    f.write(f"S3_BUCKET={data['S3_BUCKET']}\n")
+    f.write(f"S3_REGION={data['S3_REGION']}\n")
+    f.write(f"TOKEN_ENCRYPTION_KEY={data['TOKEN_ENCRYPTION_KEY']}\n")
     f.write("PORT=3000\n")
     f.write("CADVISOR_URL=http://cadvisor:8080\n")
+    f.write("OBS_NETWORK=obs-net\n")
+    f.write("OBS_CONFIG_BASE=/data/obs-configs\n")
+    f.write("OBS_TEMPLATES_PREFIX=obs-templates/\n")
+    f.write("OBS_DEFAULT_TEMPLATE=default\n")
+    f.write("OBS_WEBSOCKET_PORT=4455\n")
+    f.write("PLUGINS_PATH=/data/obs-plugins\n")
+    f.write("PANEL_ORIGIN=*\n")
+    f.write("DEBUG=\n")
 PY
   log "Linked. Node ID written to $ENV_FILE."
 else
@@ -206,7 +220,7 @@ log "Building images as $SERVICE_USER..."
 sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose build"
 
 ENV_COMPLETE="true"
-for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL; do
+for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TOKEN_ENCRYPTION_KEY; do
   grep -q "^${key}=.\+" "$ENV_FILE" || ENV_COMPLETE="false"
 done
 

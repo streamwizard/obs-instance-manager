@@ -1,16 +1,13 @@
 import type { Context, Next } from "hono";
-import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { AppVariables } from "../types";
 import { debug } from "../utils/logger";
 
-const jwtSecret = process.env.SUPABASE_JWT_SECRET;
 const supabaseUrl = process.env.SUPABASE_URL;
 
 if (!supabaseUrl) {
   throw new Error("SUPABASE_URL must be set");
 }
-
-const hsSecret = jwtSecret ? new TextEncoder().encode(jwtSecret) : null;
 
 // Newer Supabase projects (including local dev via the CLI) sign session
 // JWTs asymmetrically (ES256) and publish the verification key over JWKS,
@@ -32,13 +29,7 @@ function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
 }
 
 export async function verifyToken(token: string): Promise<{ sub?: string; iss?: string }> {
-  const { alg } = decodeProtectedHeader(token);
-  if (alg && !alg.startsWith("HS")) {
-    const { payload } = await jwtVerify(token, jwks);
-    return payload as { sub?: string; iss?: string };
-  }
-  if (!hsSecret) throw new Error("SUPABASE_JWT_SECRET is required to verify HS256 tokens");
-  const { payload } = await jwtVerify(token, hsSecret);
+  const { payload } = await jwtVerify(token, jwks);
   return payload as { sub?: string; iss?: string };
 }
 
