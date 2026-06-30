@@ -210,6 +210,9 @@ admin.post("/instances/:id/start", async (c) => {
       node,
       resolution: instance.resolution,
       obsWsPassword,
+      memory_mb: instance.memory_mb,
+      cpu_quota: instance.cpu_quota,
+      shm_size: instance.shm_size,
     });
     await startContainer(containerId);
     const updated = await updateInstance(id, { container_id: containerId, status: "running" });

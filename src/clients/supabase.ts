@@ -4,6 +4,7 @@ import {
   apiGetInstanceById,
   apiGetInstanceByIdAdmin,
   apiGetNode,
+  apiGetSubscriptionLimits,
   apiInsertInstance,
   apiIsAdmin,
   apiListNodeInstances,
@@ -12,7 +13,7 @@ import {
   apiUpdateInstance,
   apiUpdateInstanceByContainerId,
 } from "./streamwizard-api";
-import type { Instance, Node } from "../types";
+import type { CloudObsPlanLimits, Instance, Node } from "../types";
 
 export async function isAdmin(userId: string): Promise<boolean> {
   return apiIsAdmin(userId);
@@ -60,4 +61,8 @@ export async function sumAllocatedVram(_nodeId: string): Promise<number> {
 
 export async function countActiveInstances(_nodeId: string): Promise<number> {
   return apiCountActiveInstances();
+}
+
+export async function getSubscriptionLimits(subscriptionId: string): Promise<CloudObsPlanLimits> {
+  return apiGetSubscriptionLimits(subscriptionId);
 }

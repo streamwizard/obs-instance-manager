@@ -1,6 +1,6 @@
 import axios from "axios";
 import { debug, log } from "../utils/logger";
-import type { Instance, Node } from "../types";
+import type { CloudObsPlanLimits, Instance, Node } from "../types";
 
 const apiUrl = process.env.REST_API_URL;
 const nodeApiKey = process.env.NODE_API_KEY;
@@ -109,6 +109,11 @@ export async function apiListUserInstances(userId: string): Promise<Instance[]> 
 export async function apiIsAdmin(userId: string): Promise<boolean> {
   const res = await StreamwizardApi.get<{ is_admin: boolean }>(`/api/nodes/users/${userId}/is-admin`);
   return res.data.is_admin;
+}
+
+export async function apiGetSubscriptionLimits(subscriptionId: string): Promise<CloudObsPlanLimits> {
+  const res = await StreamwizardApi.get<CloudObsPlanLimits>(`/api/nodes/subscriptions/${subscriptionId}/limits`);
+  return res.data;
 }
 
 export async function apiGetStreamKey(userId: string): Promise<string | null> {

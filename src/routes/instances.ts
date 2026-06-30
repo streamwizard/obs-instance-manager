@@ -6,6 +6,7 @@ import {
   deleteInstance,
   getInstanceById,
   getNode,
+  getSubscriptionLimits,
   insertInstance,
   listUserInstances,
   sumAllocatedVram,
@@ -31,11 +32,6 @@ import { getStreamKey } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
-const DEFAULT_RESOLUTION = "1920x1080";
-const RESOLUTION_RE = /^(\d+)x(\d+)$/;
-const MAX_RESOLUTION_WIDTH = 3840;
-const MAX_RESOLUTION_HEIGHT = 2160;
-
 // Upstream connect must complete within this window or the proxy gives up
 // and closes the client side, instead of leaving it open indefinitely.
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -46,16 +42,7 @@ const CONNECT_TIMEOUT_MS = 10_000;
 const createInstanceLimiter = new KeyedRateLimiter(5, 60_000);
 
 const createInstanceSchema = z.object({
-  resolution: z
-    .string()
-    .regex(RESOLUTION_RE, "Invalid resolution format, expected WIDTHxHEIGHT")
-    .refine((val) => {
-      const match = RESOLUTION_RE.exec(val)!;
-      const width = Number(match[1]);
-      const height = Number(match[2]);
-      return width > 0 && height > 0 && width <= MAX_RESOLUTION_WIDTH && height <= MAX_RESOLUTION_HEIGHT;
-    }, `Resolution out of bounds, max ${MAX_RESOLUTION_WIDTH}x${MAX_RESOLUTION_HEIGHT}`)
-    .optional(),
+  subscription_id: z.string().uuid(),
   template: z.string().min(1).optional(),
   obs_ws_password: z.string().min(1).optional(),
   obs_ws_password_ciphertext: z.string().min(1).optional(),
@@ -248,8 +235,7 @@ instances.post("/", async (c) => {
   if (!parsed.success) {
     return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid request body" }, 400);
   }
-  const resolution = parsed.data.resolution ?? DEFAULT_RESOLUTION;
-  const template = parsed.data.template;
+  const { subscription_id: subscriptionId, template } = parsed.data;
   const obsWsPassword = parsed.data.obs_ws_password;
   const obsWsPasswordCiphertext = parsed.data.obs_ws_password_ciphertext ?? null;
   const obsWsPasswordIv = parsed.data.obs_ws_password_iv ?? null;
@@ -259,7 +245,14 @@ instances.post("/", async (c) => {
     return c.json({ error: "obs_ws_password is required" }, 400);
   }
 
-  const node = await getNode(NODE_ID);
+  const [node, planLimits] = await Promise.all([
+    getNode(NODE_ID),
+    getSubscriptionLimits(subscriptionId),
+  ]);
+
+  if (!planLimits) {
+    return c.json({ error: "Subscription not found or inactive" }, 400);
+  }
 
   const activeCount = await countActiveInstances(node.id);
   if (activeCount >= node.max_instances) {
@@ -267,7 +260,7 @@ instances.post("/", async (c) => {
   }
 
   const currentVram = await sumAllocatedVram(node.id);
-  if (currentVram + node.vram_mb > node.total_vram_mb) {
+  if (currentVram + planLimits.vram_mb > node.total_vram_mb) {
     return c.json(
       { error: "Allocating this instance would exceed total_vram_mb" },
       409,
@@ -283,9 +276,13 @@ instances.post("/", async (c) => {
     node_id: node.id,
     container_id: null,
     container_name: containerName,
-    resolution,
+    resolution: planLimits.resolution,
     status: "creating",
-    vram_allocated_mb: node.vram_mb,
+    vram_allocated_mb: planLimits.vram_mb,
+    memory_mb: planLimits.memory_mb,
+    cpu_quota: planLimits.cpu_quota,
+    shm_size: planLimits.shm_size,
+    subscription_id: subscriptionId,
     obs_ws_password_ciphertext: obsWsPasswordCiphertext,
     obs_ws_password_iv: obsWsPasswordIv,
     obs_ws_password_tag: obsWsPasswordTag,
@@ -309,8 +306,11 @@ instances.post("/", async (c) => {
       instanceId,
       containerName,
       node,
-      resolution,
+      resolution: planLimits.resolution,
       obsWsPassword,
+      memory_mb: planLimits.memory_mb,
+      cpu_quota: planLimits.cpu_quota,
+      shm_size: planLimits.shm_size,
     });
     await startContainer(containerId);
 
@@ -371,6 +371,9 @@ instances.post("/:id/start", async (c) => {
       node,
       resolution: instance.resolution,
       obsWsPassword,
+      memory_mb: instance.memory_mb,
+      cpu_quota: instance.cpu_quota,
+      shm_size: instance.shm_size,
     });
     await startContainer(containerId);
     const updated = await updateInstance(id, { container_id: containerId, status: "running" });

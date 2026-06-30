@@ -22,14 +22,28 @@ export interface Instance {
   resolution: string;
   status: InstanceStatus;
   vram_allocated_mb: number;
+  memory_mb: number;
+  cpu_quota: number;
+  shm_size: string;
+  subscription_id: string | null;
   obs_ws_password_ciphertext: string | null;
   obs_ws_password_iv: string | null;
   obs_ws_password_tag: string | null;
   created_at: string;
 }
 
+export interface CloudObsPlanLimits {
+  resolution: string;
+  fps: number;
+  max_instances: number;
+  memory_mb: number;
+  cpu_quota: number;
+  shm_size: string;
+  vram_mb: number;
+}
+
 export interface CreateInstanceBody {
-  resolution?: string;
+  subscription_id: string;
   template?: string;
   obs_ws_password?: string;
   obs_ws_password_ciphertext?: string;

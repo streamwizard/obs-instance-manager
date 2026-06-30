@@ -55,16 +55,19 @@ export interface CreateContainerOptions {
   node: Node;
   resolution: string;
   obsWsPassword: string;
+  memory_mb: number;
+  cpu_quota: number;
+  shm_size: string;
 }
 
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
-  const { instanceId, containerName, node, resolution, obsWsPassword } = opts;
+  const { instanceId, containerName, node, resolution, obsWsPassword, memory_mb, cpu_quota, shm_size } = opts;
 
   await ensureImagePulled(IMAGE);
 
-  const memoryBytes = node.memory_mb * 1024 * 1024;
+  const memoryBytes = memory_mb * 1024 * 1024;
 
   const container = await docker.createContainer({
     name: containerName,
@@ -81,7 +84,7 @@ export async function createContainer(
     ],
     HostConfig: {
       Runtime: "nvidia",
-      ShmSize: parseShmSize(node.shm_size),
+      ShmSize: parseShmSize(shm_size),
       // SYS_ADMIN is required by OBS's browser-source plugin, which ships a
       // setuid-root chrome-sandbox binary (standard Chromium sandboxing).
       // NET_ADMIN and SYS_PTRACE are required because bwrap (entrypoint.sh)
@@ -99,8 +102,7 @@ export async function createContainer(
       MemoryReservation: memoryBytes,
       MemorySwap: memoryBytes,
 
-      // 1. Give the stream engine breathing room if it's struggling on start
-      NanoCpus: Math.round(node.cpu_quota * 1000000000),
+      NanoCpus: Math.round(cpu_quota * 1000000000),
 
       Binds: [`/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`],
 
@@ -109,7 +111,7 @@ export async function createContainer(
           Driver: "nvidia",
           Count: -1,
           // FIX: Wrap the strings in a nested array to satisfy the string[][] type definition
-          Capabilities: [["gpu", "utility", "video", "display"]], 
+          Capabilities: [["gpu", "utility", "video", "display"]],
         },
       ],
     },
