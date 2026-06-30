@@ -180,9 +180,9 @@ env_path, raw = sys.argv[1], sys.argv[2]
 data = json.loads(raw)
 with open(env_path, "w") as f:
     f.write(f"NODE_ID={data['node_id']}\n")
+    f.write(f"NODE_API_KEY={data['node_api_key']}\n")
+    f.write(f"REST_API_URL={data['rest_api_url']}\n")
     f.write(f"SUPABASE_URL={data['supabase_url']}\n")
-    f.write(f"SUPABASE_SERVICE_ROLE_KEY={data['supabase_service_role_key']}\n")
-    f.write(f"SUPABASE_JWT_SECRET={data['supabase_jwt_secret']}\n")
     f.write("PORT=3000\n")
     f.write("CADVISOR_URL=http://cadvisor:8080\n")
 PY
@@ -190,7 +190,7 @@ PY
 else
   if [ ! -f "$ENV_FILE" ]; then
     cp "$REPO_DIR/.env.example" "$ENV_FILE"
-    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example — fill in NODE_ID, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET by hand before starting."
+    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example — fill in NODE_ID, NODE_API_KEY, REST_API_URL, SUPABASE_URL by hand before starting."
   else
     log "$ENV_FILE already exists, leaving it as-is."
   fi
@@ -206,7 +206,7 @@ log "Building images as $SERVICE_USER..."
 sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose build"
 
 ENV_COMPLETE="true"
-for key in NODE_ID SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_JWT_SECRET; do
+for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL; do
   grep -q "^${key}=.\+" "$ENV_FILE" || ENV_COMPLETE="false"
 done
 
