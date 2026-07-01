@@ -91,9 +91,13 @@ export async function ensureGpuXServer(node: Node): Promise<void> {
   try {
     const info = await docker.getContainer(name).inspect();
     if (info.State.Running) return;
-    await docker.getContainer(name).start();
-    log("info", "started existing gpu-xserver container", { nodeId: node.id, name });
-    return;
+    // Exists but not running -- don't just restart it: if it was created
+    // from a stale image (e.g. crash-looping because the node's Xorg
+    // config no longer matches, or it predates a fix), starting the exact
+    // same container just repeats the same failure forever. Remove it and
+    // fall through to create a fresh one from the current image instead.
+    log("warn", "gpu-xserver container exists but isn't running, recreating", { nodeId: node.id, name });
+    await docker.getContainer(name).remove({ force: true });
   } catch (err: any) {
     if (err?.statusCode !== 404) throw err;
     // not found -- fall through to create it
