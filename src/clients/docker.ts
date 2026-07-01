@@ -39,21 +39,32 @@ export const OBS_WS_PORT_INTERNAL = 4455;
 export { docker };
 
 async function ensureImagePulled(image: string): Promise<void> {
+  // Always try to pull first -- "latest" only means anything if we actually
+  // check for a newer version each time. A previous version of this function
+  // skipped the pull whenever *any* local image already existed under that
+  // tag, which silently kept reusing a stale cached image forever once one
+  // had been pulled once; only fall back to whatever's cached locally if the
+  // pull itself fails (no network/registry access, or a local-only tag used
+  // for manual dev testing with no real upstream).
   try {
-    await docker.getImage(image).inspect();
-    return; // already present locally -- skip the network pull
-  } catch {
-    // not present locally, fall through to pull
-  }
-  await new Promise<void>((resolve, reject) => {
-    docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
-      if (err) return reject(err);
-      docker.modem.followProgress(stream, (followErr: Error | null) => {
-        if (followErr) return reject(followErr);
-        resolve();
+    await new Promise<void>((resolve, reject) => {
+      docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+        if (err) return reject(err);
+        docker.modem.followProgress(stream, (followErr: Error | null) => {
+          if (followErr) return reject(followErr);
+          resolve();
+        });
       });
     });
-  });
+  } catch (pullErr) {
+    await docker.getImage(image).inspect().catch(() => {
+      throw pullErr;
+    });
+    log("warn", "image pull failed, using local cached image", {
+      image,
+      error: (pullErr as Error).message,
+    });
+  }
 }
 
 // Named volume backing the shared gpu-xserver's X11 socket directory for a
