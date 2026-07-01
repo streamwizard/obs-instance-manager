@@ -3,7 +3,7 @@ import { debug, log } from "../utils/logger";
 import { PLUGINS_LOCAL_DIR } from "../services/plugins";
 import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import { StreamwizardApi } from "./streamwizard-api";
-import type { InstanceStatus, Node } from "../types";
+import type { InstanceStatus } from "../types";
 
 // Imported lazily to avoid a circular dependency (obs-config imports s3, s3
 // imports logger, docker imports supabase — all fine, but obs-config also
@@ -67,77 +67,17 @@ async function ensureImagePulled(image: string): Promise<void> {
   }
 }
 
-// Named volume backing the shared gpu-xserver's X11 socket directory for a
-// given node -- read-write for the gpu-xserver container (its Xorg creates
-// the socket there), read-only for every instance container on that node.
-function gpuXSocketVolume(nodeId: string): string {
-  return `gpu-x11-socket-${nodeId}`;
-}
-
-function gpuXServerContainerName(nodeId: string): string {
-  return `gpu-xserver-${nodeId}`;
-}
-
-// Idempotently ensures the one real, GPU-bound Xorg ("3D X server", see
-// ROLE=gpu-xserver in obs-cloud-container's entrypoint.sh) is up for this
-// node before any instance container tries to render through it via
-// VirtualGL. NVIDIA only allows one exclusive DRM master per physical GPU,
-// so this must be a singleton per node -- every instance container shares
-// it instead of each running its own GPU-bound Xorg (which is what used to
-// crash-loop everything but the first instance).
-export async function ensureGpuXServer(node: Node): Promise<void> {
-  const name = gpuXServerContainerName(node.id);
-
-  try {
-    const info = await docker.getContainer(name).inspect();
-    if (info.State.Running) return;
-    // Exists but not running -- don't just restart it: if it was created
-    // from a stale image (e.g. crash-looping because the node's Xorg
-    // config no longer matches, or it predates a fix), starting the exact
-    // same container just repeats the same failure forever. Remove it and
-    // fall through to create a fresh one from the current image instead.
-    log("warn", "gpu-xserver container exists but isn't running, recreating", { nodeId: node.id, name });
-    await docker.getContainer(name).remove({ force: true });
-  } catch (err: any) {
-    if (err?.statusCode !== 404) throw err;
-    // not found -- fall through to create it
-  }
-
-  await ensureImagePulled(IMAGE);
-
-  const container = await docker.createContainer({
-    name,
-    Image: IMAGE,
-    Env: [`ROLE=gpu-xserver`, `GPU_BUSID=${node.gpu_bus_id}`, `RESOLUTION=1920x1080`],
-    HostConfig: {
-      Runtime: "nvidia",
-      RestartPolicy: { Name: "unless-stopped" },
-      // No SYS_ADMIN/NET_ADMIN/SYS_PTRACE/unconfined apparmor+seccomp here:
-      // this container never runs bwrap (no OBS, no browser-source jail).
-      Binds: [`${gpuXSocketVolume(node.id)}:/tmp/.X11-unix`],
-      DeviceRequests: [
-        {
-          Driver: "nvidia",
-          Count: -1,
-          Capabilities: [["gpu", "utility", "video", "display"]],
-        },
-      ],
-    },
-    NetworkingConfig: {
-      EndpointsConfig: {
-        [NETWORK_NAME]: {},
-      },
-    },
-  });
-
-  await container.start();
-  log("info", "created and started gpu-xserver container", { nodeId: node.id, name });
-}
+// Named volume backing the shared gpu-xserver's X11 socket directory --
+// gpu-xserver itself is a plain static service in this repo's own
+// docker-compose.yml (one per machine/GPU, alongside `api`/`cadvisor`), not
+// something this API provisions at runtime. Read-only here since every
+// instance container only ever consumes that socket via VirtualGL, never
+// creates it.
+const GPU_XSOCKET_VOLUME = "gpu-x11-socket";
 
 export interface CreateContainerOptions {
   instanceId: string;
   containerName: string;
-  node: Node;
   resolution: string;
   obsWsPassword: string;
   memory_mb: number;
@@ -148,7 +88,7 @@ export interface CreateContainerOptions {
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
-  const { instanceId, containerName, node, resolution, obsWsPassword, memory_mb, cpu_quota, shm_size } = opts;
+  const { instanceId, containerName, resolution, obsWsPassword, memory_mb, cpu_quota, shm_size } = opts;
 
   await ensureImagePulled(IMAGE);
 
@@ -164,7 +104,7 @@ export async function createContainer(
       `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
       // :10, not :0 -- :0 is reserved for the shared gpu-xserver's real
-      // Xorg (see ensureGpuXServer); each instance's own Xvfb lives here.
+      // Xorg (see docker-compose.yml); each instance's own Xvfb lives here.
       `DISPLAY_NUM=:10`,
       `OBS_BROWSER_EXTRA_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu`,
     ],
@@ -196,8 +136,8 @@ export async function createContainer(
         // syncPlugins() instead of duplicating plugin binaries per instance.
         `${PLUGINS_LOCAL_DIR}:/home/app/.config/obs-studio/plugins:ro`,
         // Read-only: this instance only ever consumes the shared gpu-xserver's
-        // X11 socket (see ensureGpuXServer), never creates it.
-        `${gpuXSocketVolume(node.id)}:/opt/gpu-xsocket:ro`,
+        // X11 socket (a static service in docker-compose.yml), never creates it.
+        `${GPU_XSOCKET_VOLUME}:/opt/gpu-xsocket:ro`,
       ],
 
       DeviceRequests: [

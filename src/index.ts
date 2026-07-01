@@ -5,10 +5,9 @@ import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
 import { debug, log } from "./utils/logger";
-import { ensureGpuXServer, reconcileContainers, registerConfigHandlers, startEventListener } from "./clients/docker";
+import { reconcileContainers, registerConfigHandlers, startEventListener } from "./clients/docker";
 import { pushObsConfig, removeLocalConfig } from "./services/obs-config";
 import { checkS3 } from "./clients/s3";
-import { getNode } from "./clients/supabase";
 import { NODE_ID } from "./utils/node";
 import { MAX_REQUEST_BODY_BYTES } from "./utils/constants";
 import type { AppVariables } from "./types";
@@ -73,12 +72,6 @@ const port = Number(process.env.PORT) || 3000;
 await checkS3();
 
 registerConfigHandlers(pushObsConfig, removeLocalConfig);
-
-await getNode(NODE_ID)
-  .then((node) => ensureGpuXServer(node))
-  .catch((err) =>
-    log("error", "boot-time gpu-xserver provisioning failed", { error: (err as Error).message }),
-  );
 
 await reconcileContainers(NODE_ID).catch((err) =>
   log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),

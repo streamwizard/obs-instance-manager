@@ -45,9 +45,40 @@ services:
     networks:
       - internal
 
+  # The one real, GPU-bound Xorg for this machine's physical GPU (see
+  # ROLE=gpu-xserver in obs-cloud-container's entrypoint.sh). NVIDIA only
+  # allows one exclusive DRM master per physical GPU, so every obs-instance-*
+  # container shares this single X server via VirtualGL (`vglrun`) instead of
+  # each running its own GPU-bound Xorg -- which is what used to crash-loop
+  # every instance after the first. One compose stack = one machine = one
+  # GPU today, so this is a plain static service, not something the API needs
+  # to provision/manage itself.
+  gpu-xserver:
+    image: ghcr.io/streamwizard/obs-cloud-container:latest
+    container_name: gpu-xserver
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - ROLE=gpu-xserver
+      - GPU_BUSID=${GPU_BUSID:-PCI:0:16:0}
+      - RESOLUTION=1920x1080
+    volumes:
+      - gpu-x11-socket:/tmp/.X11-unix
+    # No SYS_ADMIN/NET_ADMIN/SYS_PTRACE/unconfined apparmor+seccomp here:
+    # this container never runs bwrap (no OBS, no browser-source jail).
+
 networks:
   internal:
     driver: bridge
   obs-net:
     name: obs-net
     driver: bridge
+
+volumes:
+  # Explicit fixed name so obs-instance-manager's own container-creation
+  # code (src/clients/docker.ts) can reference it by a stable name,
+  # independent of this compose project's name.
+  gpu-x11-socket:
+    name: gpu-x11-socket

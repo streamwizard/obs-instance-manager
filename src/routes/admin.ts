@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
-import { deleteInstance, getInstanceByIdAdmin, getNode, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
+import { deleteInstance, getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
 import { getAllMetrics } from "../services/metrics";
 import { createContainer, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, startContainer, stopContainer } from "../clients/docker";
 import { NODE_ID } from "../utils/node";
@@ -182,8 +182,6 @@ admin.post("/instances/:id/start", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
 
-  const node = await getNode(NODE_ID);
-
   await pullObsConfig(instance.user_id, instance.id).catch((e) =>
     log("warn", "obs config pull failed, starting with empty config", {
       instanceId: instance.id,
@@ -207,7 +205,6 @@ admin.post("/instances/:id/start", async (c) => {
     containerId = await createContainer({
       instanceId: instance.id,
       containerName: instance.container_name,
-      node,
       resolution: instance.resolution,
       obsWsPassword,
       memory_mb: instance.memory_mb,

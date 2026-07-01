@@ -14,7 +14,6 @@ import {
 } from "../clients/supabase";
 import {
   createContainer,
-  ensureGpuXServer,
   getContainerStatus,
   instanceTarget,
   NOVNC_PORT_INTERNAL,
@@ -312,12 +311,9 @@ instances.post("/", async (c) => {
     const streamKey = await getStreamKey(userId);
     if (streamKey) await injectStreamKey(instanceId, streamKey);
 
-    await ensureGpuXServer(node);
-
     containerId = await createContainer({
       instanceId,
       containerName,
-      node,
       resolution: planLimits.resolution,
       obsWsPassword,
       memory_mb: planLimits.memory_mb,
@@ -351,8 +347,6 @@ instances.post("/:id/start", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
 
-  const node = await getNode(NODE_ID);
-
   await Promise.all([
     pullObsConfig(instance.user_id, instance.id).catch((e) =>
       log("warn", "obs config pull failed, starting with empty config", {
@@ -385,12 +379,9 @@ instances.post("/:id/start", async (c) => {
 
   let containerId: string | null = null;
   try {
-    await ensureGpuXServer(node);
-
     containerId = await createContainer({
       instanceId: instance.id,
       containerName: instance.container_name,
-      node,
       resolution: instance.resolution,
       obsWsPassword,
       memory_mb: instance.memory_mb,
