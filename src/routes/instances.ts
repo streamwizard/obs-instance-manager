@@ -14,6 +14,7 @@ import {
 } from "../clients/supabase";
 import {
   createContainer,
+  ensureGpuXServer,
   getContainerStatus,
   instanceTarget,
   NOVNC_PORT_INTERNAL,
@@ -311,6 +312,8 @@ instances.post("/", async (c) => {
     const streamKey = await getStreamKey(userId);
     if (streamKey) await injectStreamKey(instanceId, streamKey);
 
+    await ensureGpuXServer(node);
+
     containerId = await createContainer({
       instanceId,
       containerName,
@@ -382,6 +385,8 @@ instances.post("/:id/start", async (c) => {
 
   let containerId: string | null = null;
   try {
+    await ensureGpuXServer(node);
+
     containerId = await createContainer({
       instanceId: instance.id,
       containerName: instance.container_name,

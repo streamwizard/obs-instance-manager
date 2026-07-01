@@ -39,6 +39,12 @@ export const OBS_WS_PORT_INTERNAL = 4455;
 export { docker };
 
 async function ensureImagePulled(image: string): Promise<void> {
+  try {
+    await docker.getImage(image).inspect();
+    return; // already present locally -- skip the network pull
+  } catch {
+    // not present locally, fall through to pull
+  }
   await new Promise<void>((resolve, reject) => {
     docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
       if (err) return reject(err);
@@ -48,6 +54,69 @@ async function ensureImagePulled(image: string): Promise<void> {
       });
     });
   });
+}
+
+// Named volume backing the shared gpu-xserver's X11 socket directory for a
+// given node -- read-write for the gpu-xserver container (its Xorg creates
+// the socket there), read-only for every instance container on that node.
+function gpuXSocketVolume(nodeId: string): string {
+  return `gpu-x11-socket-${nodeId}`;
+}
+
+function gpuXServerContainerName(nodeId: string): string {
+  return `gpu-xserver-${nodeId}`;
+}
+
+// Idempotently ensures the one real, GPU-bound Xorg ("3D X server", see
+// ROLE=gpu-xserver in obs-cloud-container's entrypoint.sh) is up for this
+// node before any instance container tries to render through it via
+// VirtualGL. NVIDIA only allows one exclusive DRM master per physical GPU,
+// so this must be a singleton per node -- every instance container shares
+// it instead of each running its own GPU-bound Xorg (which is what used to
+// crash-loop everything but the first instance).
+export async function ensureGpuXServer(node: Node): Promise<void> {
+  const name = gpuXServerContainerName(node.id);
+
+  try {
+    const info = await docker.getContainer(name).inspect();
+    if (info.State.Running) return;
+    await docker.getContainer(name).start();
+    log("info", "started existing gpu-xserver container", { nodeId: node.id, name });
+    return;
+  } catch (err: any) {
+    if (err?.statusCode !== 404) throw err;
+    // not found -- fall through to create it
+  }
+
+  await ensureImagePulled(IMAGE);
+
+  const container = await docker.createContainer({
+    name,
+    Image: IMAGE,
+    Env: [`ROLE=gpu-xserver`, `GPU_BUSID=${node.gpu_bus_id}`, `RESOLUTION=1920x1080`],
+    HostConfig: {
+      Runtime: "nvidia",
+      RestartPolicy: { Name: "unless-stopped" },
+      // No SYS_ADMIN/NET_ADMIN/SYS_PTRACE/unconfined apparmor+seccomp here:
+      // this container never runs bwrap (no OBS, no browser-source jail).
+      Binds: [`${gpuXSocketVolume(node.id)}:/tmp/.X11-unix`],
+      DeviceRequests: [
+        {
+          Driver: "nvidia",
+          Count: -1,
+          Capabilities: [["gpu", "utility", "video", "display"]],
+        },
+      ],
+    },
+    NetworkingConfig: {
+      EndpointsConfig: {
+        [NETWORK_NAME]: {},
+      },
+    },
+  });
+
+  await container.start();
+  log("info", "created and started gpu-xserver container", { nodeId: node.id, name });
 }
 
 export interface CreateContainerOptions {
@@ -75,12 +144,13 @@ export async function createContainer(
     Image: IMAGE,
     Env: [
       `RESOLUTION=${resolution}`,
-      `GPU_BUSID=${node.gpu_bus_id}`,
       `VNC_PORT=${VNC_PORT_INTERNAL}`,
       `NOVNC_PORT=${NOVNC_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
-      `DISPLAY_NUM=:0`,
+      // :10, not :0 -- :0 is reserved for the shared gpu-xserver's real
+      // Xorg (see ensureGpuXServer); each instance's own Xvfb lives here.
+      `DISPLAY_NUM=:10`,
       `OBS_BROWSER_EXTRA_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu`,
     ],
     HostConfig: {
@@ -110,6 +180,9 @@ export async function createContainer(
         // Shared, read-only across all instances on this node — synced once via
         // syncPlugins() instead of duplicating plugin binaries per instance.
         `${PLUGINS_LOCAL_DIR}:/home/app/.config/obs-studio/plugins:ro`,
+        // Read-only: this instance only ever consumes the shared gpu-xserver's
+        // X11 socket (see ensureGpuXServer), never creates it.
+        `${gpuXSocketVolume(node.id)}:/opt/gpu-xsocket:ro`,
       ],
 
       DeviceRequests: [
