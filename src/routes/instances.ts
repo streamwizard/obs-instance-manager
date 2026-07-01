@@ -27,6 +27,7 @@ import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
+import { syncPlugins } from "../services/plugins";
 import { decryptPassword } from "../utils/crypto";
 import { getStreamKey } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
@@ -290,12 +291,20 @@ instances.post("/", async (c) => {
 
   let containerId: string | null = null;
   try {
-    await pullObsConfig(userId, instanceId, template).catch((e) =>
-      log("warn", "obs config pull failed, starting with empty config", {
-        instanceId,
-        error: (e as Error).message,
-      })
-    );
+    await Promise.all([
+      pullObsConfig(userId, instanceId, template).catch((e) =>
+        log("warn", "obs config pull failed, starting with empty config", {
+          instanceId,
+          error: (e as Error).message,
+        })
+      ),
+      syncPlugins().catch((e) =>
+        log("warn", "plugin sync failed, starting with existing local plugins", {
+          instanceId,
+          error: (e as Error).message,
+        })
+      ),
+    ]);
 
     await injectObsWsPassword(instanceId, obsWsPassword);
 
@@ -341,12 +350,20 @@ instances.post("/:id/start", async (c) => {
 
   const node = await getNode(NODE_ID);
 
-  await pullObsConfig(instance.user_id, instance.id).catch((e) =>
-    log("warn", "obs config pull failed, starting with empty config", {
-      instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
+  await Promise.all([
+    pullObsConfig(instance.user_id, instance.id).catch((e) =>
+      log("warn", "obs config pull failed, starting with empty config", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    ),
+    syncPlugins().catch((e) =>
+      log("warn", "plugin sync failed, starting with existing local plugins", {
+        instanceId: instance.id,
+        error: (e as Error).message,
+      })
+    ),
+  ]);
 
   if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
     return c.json({ error: "Instance is missing OBS WebSocket password." }, 500);

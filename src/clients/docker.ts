@@ -1,5 +1,6 @@
 import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
+import { PLUGINS_LOCAL_DIR } from "../services/plugins";
 import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import { StreamwizardApi } from "./streamwizard-api";
 import type { InstanceStatus, Node } from "../types";
@@ -104,7 +105,12 @@ export async function createContainer(
 
       NanoCpus: Math.round(cpu_quota * 1000000000),
 
-      Binds: [`/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`],
+      Binds: [
+        `/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`,
+        // Shared, read-only across all instances on this node — synced once via
+        // syncPlugins() instead of duplicating plugin binaries per instance.
+        `${PLUGINS_LOCAL_DIR}:/home/app/.config/obs-studio/plugins:ro`,
+      ],
 
       DeviceRequests: [
         {

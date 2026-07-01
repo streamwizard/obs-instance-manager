@@ -144,6 +144,9 @@ usermod -aG docker "$SERVICE_USER"
 mkdir -p /data/obs-configs
 chown -R "$SERVICE_USER:$SERVICE_USER" /data/obs-configs
 
+mkdir -p /data/obs-plugins
+chown -R "$SERVICE_USER:$SERVICE_USER" /data/obs-plugins
+
 log "Fetching obs-instance-manager into $REPO_DIR..."
 if [ -d "$REPO_DIR/.git" ]; then
   warn "$REPO_DIR already exists; leaving it as-is. Update it yourself (git pull) if you want the latest source."

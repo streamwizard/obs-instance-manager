@@ -64,8 +64,7 @@ async function listS3Objects(prefix: string): Promise<string[]> {
   return keys;
 }
 
-async function downloadPrefix(prefix: string, localBase: string): Promise<void> {
-  const keys = await listS3Objects(prefix);
+async function downloadPrefix(keys: string[], prefix: string, localBase: string): Promise<void> {
   if (keys.length === 0) return;
 
   const baseResolved = resolve(localBase) + sep;
@@ -95,19 +94,24 @@ export async function pullObsConfig(userId: string, instanceId: string, template
   const localBase = localConfigDir(instanceId);
   await mkdir(localBase, { recursive: true });
 
-  // Always apply the template as a base layer (plugins, default config, etc.)
+  // Always apply the template as a base layer (default config, scenes, etc.).
+  // Plugin binaries are excluded here — they're shared across all instances via
+  // syncPlugins()/PLUGINS_LOCAL_DIR and bind-mounted directly into the container,
+  // rather than duplicated per instance. This filter is defensive: it holds even
+  // if a template still has (or regains) its own plugins/ subtree in S3.
   const tPrefix = templatePrefix(template);
-  const templateKeys = await listS3Objects(tPrefix);
+  const allTemplateKeys = await listS3Objects(tPrefix);
+  const templateKeys = allTemplateKeys.filter((key) => !key.slice(tPrefix.length).startsWith("plugins/"));
   if (templateKeys.length > 0) {
-    await downloadPrefix(tPrefix, localBase);
-    debug("s3", `applied template "${template}" (${templateKeys.length} files) for instance ${instanceId}`);
+    await downloadPrefix(templateKeys, tPrefix, localBase);
+    debug("s3", `applied template "${template}" (${templateKeys.length} files, ${allTemplateKeys.length - templateKeys.length} plugin files excluded) for instance ${instanceId}`);
   }
 
   // Overlay the instance's own config on top (user changes win over template)
   const prefix = s3Prefix(userId, instanceId);
   const keys = await listS3Objects(prefix);
   if (keys.length > 0) {
-    await downloadPrefix(prefix, localBase);
+    await downloadPrefix(keys, prefix, localBase);
     log("info", "obs config pulled from S3", { userId, instanceId, template, templateFiles: templateKeys.length, instanceFiles: keys.length });
   } else {
     log("info", "no instance config in S3, started from template", { userId, instanceId, template, templateFiles: templateKeys.length });

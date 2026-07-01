@@ -18,11 +18,25 @@ async function loadEtagCache(dir: string): Promise<Record<string, string>> {
   }
 }
 
+// Guards against two concurrent create/start requests both listing+downloading
+// S3 on a cold node — callers that arrive while a sync is in flight just await
+// the same promise instead of racing a redundant sync.
+let inFlight: Promise<void> | null = null;
+
 // Syncs the plugins/ prefix from S3 to PLUGINS_LOCAL_DIR, skipping files
 // whose ETag matches the local cache (i.e. already up to date). Called
 // before every container create/start so nodes always run the latest plugins
 // without needing manual file placement or an API restart.
-export async function syncPlugins(): Promise<void> {
+export function syncPlugins(): Promise<void> {
+  if (!inFlight) {
+    inFlight = syncPluginsInternal().finally(() => {
+      inFlight = null;
+    });
+  }
+  return inFlight;
+}
+
+async function syncPluginsInternal(): Promise<void> {
   await mkdir(PLUGINS_LOCAL_DIR, { recursive: true });
 
   let objects: { key: string; etag: string }[] = [];
