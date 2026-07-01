@@ -22,6 +22,15 @@ function s3Prefix(userId: string, instanceId: string): string {
   return `obs-configs/${userId}/${instanceId}/`;
 }
 
+// Plugin binaries are shared across all instances via syncPlugins()/PLUGINS_LOCAL_DIR
+// and bind-mounted directly into the container — they must never be pulled into, or
+// pushed from, an instance's own config tree. Applies to both the template base layer
+// and the per-user overlay, since instances created before this change may still have
+// a legacy per-instance "plugins/" copy sitting in their S3 overlay.
+function isPluginPath(rel: string): boolean {
+  return rel.startsWith("plugins/");
+}
+
 async function listLocalFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
   try {
@@ -101,15 +110,19 @@ export async function pullObsConfig(userId: string, instanceId: string, template
   // if a template still has (or regains) its own plugins/ subtree in S3.
   const tPrefix = templatePrefix(template);
   const allTemplateKeys = await listS3Objects(tPrefix);
-  const templateKeys = allTemplateKeys.filter((key) => !key.slice(tPrefix.length).startsWith("plugins/"));
+  const templateKeys = allTemplateKeys.filter((key) => !isPluginPath(key.slice(tPrefix.length)));
   if (templateKeys.length > 0) {
     await downloadPrefix(templateKeys, tPrefix, localBase);
     debug("s3", `applied template "${template}" (${templateKeys.length} files, ${allTemplateKeys.length - templateKeys.length} plugin files excluded) for instance ${instanceId}`);
   }
 
-  // Overlay the instance's own config on top (user changes win over template)
+  // Overlay the instance's own config on top (user changes win over template).
+  // Also excludes plugins/ — some instances created before plugins were shared
+  // still have a legacy per-instance plugin copy in their S3 overlay; skip it
+  // rather than re-downloading it only for the shared mount to hide it anyway.
   const prefix = s3Prefix(userId, instanceId);
-  const keys = await listS3Objects(prefix);
+  const allKeys = await listS3Objects(prefix);
+  const keys = allKeys.filter((key) => !isPluginPath(key.slice(prefix.length)));
   if (keys.length > 0) {
     await downloadPrefix(keys, prefix, localBase);
     log("info", "obs config pulled from S3", { userId, instanceId, template, templateFiles: templateKeys.length, instanceFiles: keys.length });
@@ -125,7 +138,11 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
   const localBase = localConfigDir(instanceId);
   const prefix = s3Prefix(userId, instanceId);
 
-  const files = await listLocalFiles(localBase);
+  // Never push plugins/ back to the per-instance overlay — it's a shared,
+  // read-only bind mount, not instance-owned state (see isPluginPath).
+  const files = (await listLocalFiles(localBase)).filter(
+    (filePath) => !isPluginPath(relative(localBase, filePath))
+  );
 
   if (files.length === 0) {
     debug("s3", `no local config to push for instance ${instanceId}`);
