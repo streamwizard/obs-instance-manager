@@ -177,15 +177,19 @@ print(f'PCI:{int(bus, 16)}:{int(dev, 16)}:{int(func, 16)}')
     -d "{\"token\":\"$TOKEN\",\"gpu_bus_id\":\"$GPU_BUS_ID\",\"vram_total_mb\":$VRAM_TOTAL_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"cpu_cores\":$CPU_CORES}")" \
     || die "Node claim request to $REST_API_URL failed after retries. Check the URL/token and that rest-api's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
 
-  python3 - "$ENV_FILE" "$CLAIM_RESPONSE" <<'PY'
+  python3 - "$ENV_FILE" "$CLAIM_RESPONSE" "$GPU_BUS_ID" <<'PY'
 import json, sys
-env_path, raw = sys.argv[1], sys.argv[2]
+env_path, raw, gpu_bus_id_computed = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json.loads(raw)
 with open(env_path, "w") as f:
     f.write(f"NODE_ID={data['node_id']}\n")
     f.write(f"NODE_API_KEY={data['node_api_key']}\n")
     f.write(f"REST_API_URL={data['rest_api_url']}\n")
     f.write(f"SUPABASE_URL={data['supabase_url']}\n")
+    # Prefer whatever the panel echoes back (the value now stored in the
+    # database), falling back to what we just computed and submitted above
+    # in case the claim response doesn't happen to include it.
+    f.write(f"GPU_BUSID={data.get('gpu_bus_id', gpu_bus_id_computed)}\n")
     f.write(f"S3_ENDPOINT={data['S3_ENDPOINT']}\n")
     f.write(f"S3_ACCESS_KEY={data['S3_ACCESS_KEY']}\n")
     f.write(f"S3_SECRET_KEY={data['S3_SECRET_KEY']}\n")
@@ -223,7 +227,7 @@ log "Building images as $SERVICE_USER..."
 sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose build"
 
 ENV_COMPLETE="true"
-for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TOKEN_ENCRYPTION_KEY; do
+for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TOKEN_ENCRYPTION_KEY; do
   grep -q "^${key}=.\+" "$ENV_FILE" || ENV_COMPLETE="false"
 done
 
