@@ -19,14 +19,19 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
 ## Flow
 
 1. **Admin creates a node in the panel UI.** Panel inserts a row into
-   `obs_nodes` with `status = 'pending'`, the admin-chosen capacity fields
-   (`max_instances`, `memory_mb`, `cpu_quota`, `vram_mb`, `total_vram_mb`,
-   `shm_size`), and a freshly generated **claim token**. Store only a hash of
-   the token (e.g. SHA-256), with an expiry (suggest 15–30 minutes, matching
-   Wings' UX) — the same way you'd store a password reset token.
+   `obs_nodes` with `status = 'pending'`, the admin-chosen fields (`name`,
+   `api_url`, `max_instances`), and a freshly generated **claim token**. Store
+   only a hash of the token (e.g. SHA-256), with an expiry (suggest 15–30
+   minutes, matching Wings' UX) — the same way you'd store a password reset
+   token.
 
-   `gpu_bus_id` is left blank; the node reports its own GPU's PCI bus id
-   during claim (it can't be known until the node calls in).
+   Everything else about the physical node — `gpu_bus_id`, `total_vram_mb`,
+   `ram_total_mb`, `cpu_cores`, `gpu_model`, `storage_total_mb`, `hostname` —
+   is left blank at creation time; the node reports these facts about itself
+   during claim, since it can't be known until the node calls in. (Per-instance
+   Docker resource limits — memory/CPU/shm — are **not** node-level fields at
+   all; they come from the calling user's subscription plan at instance
+   creation time, so there's nothing to collect here for them.)
 
 2. **Panel shows an install command**, e.g.:
 
@@ -48,35 +53,47 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "gpu_bus_id": "00000000:00:10.0",
      "vram_total_mb": 8192,
      "ram_total_mb": 32768,
-     "cpu_cores": 8
+     "cpu_cores": 8,
+     "gpu_model": "NVIDIA GeForce RTX 2070",
+     "storage_total_mb": 102400
    }
    ```
 
-   (`gpu_bus_id` from `nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader`,
-   the rest from `/proc/meminfo` and `nproc`.) This lives in `rest-api`
-   rather than the Next.js panel app — it's a machine-to-machine endpoint
-   with no Supabase session involved, hit by a fresh, untrusted VM with
-   nothing but a one-time token, which fits `rest-api`'s existing
-   brute-force protection and security middleware better than the
-   cookie/session-oriented routes in the web app.
+   (`gpu_bus_id`/`vram_total_mb`/`gpu_model` from `nvidia-smi`, `ram_total_mb`
+   from `/proc/meminfo`, `cpu_cores` from `nproc`, `storage_total_mb` from
+   `df` on the root filesystem.) This lives in `rest-api` rather than the
+   Next.js panel app — it's a machine-to-machine endpoint with no Supabase
+   session involved, hit by a fresh, untrusted VM with nothing but a
+   one-time token, which fits `rest-api`'s existing brute-force protection
+   and security middleware better than the cookie/session-oriented routes
+   in the web app.
 
 4. **rest-api validates and responds.** Look up the pending node by token
    hash, reject if expired/already claimed/not found (`404`). On success:
-   mark the token consumed, fill in `gpu_bus_id` on the row, set
-   `status = 'linked'`, and return:
+   mark the token consumed, fill in `gpu_bus_id` and the self-reported
+   hardware fields on the row, slugify the node's `name` into a `hostname`
+   (e.g. `"GPU Box 1"` → `gpu-box-1`) and store that too, set
+   `status = 'linked'`, and return (actual current shape, see
+   `apps/rest-api/src/routes/nodes.ts`):
 
    ```json
    {
      "node_id": "<uuid, the obs_nodes.id>",
+     "node_api_key": "<node's long-lived bearer credential>",
+     "hostname": "gpu-box-1",
+     "rest_api_url": "https://api.example.com",
      "supabase_url": "https://xxxx.supabase.co",
-     "supabase_service_role_key": "...",
-     "supabase_jwt_secret": "..."
+     "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
+     "S3_BUCKET": "...", "S3_REGION": "...",
+     "TOKEN_ENCRYPTION_KEY": "..."
    }
    ```
 
-5. **Node writes `.env`** from that response (`NODE_ID`,
-   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`) and
-   brings the stack up.
+5. **Node writes `.env`** from that response and **sets its own hostname**
+   to the returned `hostname` (`hostnamectl set-hostname`, plus updating
+   `/etc/hosts`' `127.0.1.1` line) before bringing the stack up. This is what
+   makes a freshly imaged, generically-named VM identify itself correctly —
+   matching what the panel already calls it — with no manual rename step.
 
 ## Realtime admin metrics
 
@@ -125,18 +142,15 @@ is straightforward once there's a reason to add an authenticated
 node-control endpoint — track open proxy connections by `userId` in memory
 and expose a way to force-close them.
 
-## Known trade-off: every node gets the global service-role key
+## Resolved: nodes no longer talk to Supabase directly
 
-Step 4 hands the node the *same* Supabase service-role key every other node
-gets — it bypasses RLS entirely. That's an acceptably broad trust model for a
-first cut (mirrors early Wings daemon tokens), but it means a compromised
-node compromises the whole database, not just its own rows. The clean fix is
-to stop having obs-instance-manager talk to Supabase directly at all, and
-instead have it call back through panel-owned API endpoints scoped to that
-node's own `obs_nodes`/`obs_instances` rows — but that's a real rewrite of
-`src/lib/supabase.ts`'s call sites, not a config change, so it's deliberately
-out of scope here. Worth doing before this goes past a handful of trusted
-nodes.
+An earlier version of this doc flagged that every node received the global
+Supabase service-role key and called Supabase directly, bypassing RLS. That's
+no longer the case: `src/clients/supabase.ts` is now a thin wrapper around
+`src/clients/streamwizard-api.ts`, which calls the panel's `/api/nodes/*`
+endpoints using the node's own `NODE_API_KEY` instead. Each node's blast
+radius is now whatever those node-scoped endpoints expose, not the whole
+database.
 
 ## Schema changes needed in the streamwizard repo
 
@@ -168,6 +182,28 @@ alter table obs_instances
 
 Existing `obs_nodes` rows (including the seeded default one) should have
 `status` backfilled to `'linked'` since they're already running.
+
+Two more columns are needed for the VNC-password and NVENC-session-budget
+work in this repo:
+
+```sql
+alter table obs_nodes
+  add column if not exists max_encoder_sessions integer;
+
+alter table obs_instances
+  add column if not exists vnc_password_ciphertext text,
+  add column if not exists vnc_password_iv text,
+  add column if not exists vnc_password_tag text;
+```
+
+`max_encoder_sessions` should be set to `8` for consumer (GeForce) GPU nodes
+— the concurrent-NVENC-session cap the driver enforces regardless of VRAM
+headroom — and left `null` (unlimited) for Quadro/RTX-A nodes, which have no
+such cap. `vnc_password_*` mirrors the existing `obs_ws_password_*` columns'
+shape but is generated and encrypted server-side by obs-instance-manager
+itself rather than by the panel, since the VNC password is purely an
+obs-net isolation measure (see entrypoint.sh's `x11vnc -rfbauth`) that the
+end user never needs to see.
 
 Note: an earlier version of this doc also had this migration add an
 `admin_token` column, used to authenticate a panel-side relay for

@@ -18,8 +18,16 @@ function localConfigDir(instanceId: string): string {
   return join(CONFIG_BASE, instanceId, "obs-studio");
 }
 
+function localMediaDir(instanceId: string): string {
+  return join(CONFIG_BASE, instanceId, "media");
+}
+
 function s3Prefix(userId: string, instanceId: string): string {
   return `obs-configs/${userId}/${instanceId}/`;
+}
+
+function s3MediaPrefix(userId: string, instanceId: string): string {
+  return `obs-media/${userId}/${instanceId}/`;
 }
 
 // Plugin binaries are shared across all instances via syncPlugins()/PLUGINS_LOCAL_DIR
@@ -129,6 +137,25 @@ export async function pullObsConfig(userId: string, instanceId: string, template
   } else {
     log("info", "no instance config in S3, started from template", { userId, instanceId, template, templateFiles: templateKeys.length });
   }
+
+  await pullObsMedia(userId, instanceId);
+}
+
+// Restores whatever the user previously placed in OBS's media folder (see
+// docker.ts's /home/app/media bind mount). No template layer here — media
+// is purely user-owned, unlike config which has a shared default base.
+export async function pullObsMedia(userId: string, instanceId: string): Promise<void> {
+  const localBase = localMediaDir(instanceId);
+  await mkdir(localBase, { recursive: true });
+
+  const prefix = s3MediaPrefix(userId, instanceId);
+  const keys = await listS3Objects(prefix);
+  if (keys.length > 0) {
+    await downloadPrefix(keys, prefix, localBase);
+    log("info", "obs media pulled from S3", { userId, instanceId, files: keys.length });
+  } else {
+    debug("s3", `no media in S3 for instance ${instanceId}`);
+  }
 }
 
 // Uploads the instance's local OBS config to S3 under the user's key so it
@@ -165,6 +192,34 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
   );
 
   log("info", "obs config pushed to S3", { userId, instanceId, files: files.length });
+
+  await pushObsMedia(userId, instanceId);
+}
+
+export async function pushObsMedia(userId: string, instanceId: string): Promise<void> {
+  const localBase = localMediaDir(instanceId);
+  const prefix = s3MediaPrefix(userId, instanceId);
+
+  const files = await listLocalFiles(localBase);
+  if (files.length === 0) {
+    debug("s3", `no local media to push for instance ${instanceId}`);
+    return;
+  }
+
+  await Promise.all(
+    files.map(async (filePath) => {
+      const key = `${prefix}${relative(localBase, filePath)}`;
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: key,
+          Body: new Uint8Array(await Bun.file(filePath).arrayBuffer()),
+        })
+      );
+    })
+  );
+
+  log("info", "obs media pushed to S3", { userId, instanceId, files: files.length });
 }
 
 export async function removeLocalConfig(instanceId: string): Promise<void> {
@@ -264,12 +319,22 @@ export async function removeS3Config(userId: string, instanceId: string): Promis
   const keys = await listS3Objects(prefix);
   if (keys.length === 0) {
     debug("s3", `no S3 config to remove for instance ${instanceId}`);
+  } else {
+    await Promise.all(
+      keys.map((Key) => s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key })))
+    );
+    log("info", "obs config removed from S3", { userId, instanceId, files: keys.length });
+  }
+
+  const mediaPrefix = s3MediaPrefix(userId, instanceId);
+  const mediaKeys = await listS3Objects(mediaPrefix);
+  if (mediaKeys.length === 0) {
+    debug("s3", `no S3 media to remove for instance ${instanceId}`);
     return;
   }
 
   await Promise.all(
-    keys.map((Key) => s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key })))
+    mediaKeys.map((Key) => s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key })))
   );
-
-  log("info", "obs config removed from S3", { userId, instanceId, files: keys.length });
+  log("info", "obs media removed from S3", { userId, instanceId, files: mediaKeys.length });
 }

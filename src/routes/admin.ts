@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
 import { deleteInstance, getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
 import { getAllMetrics } from "../services/metrics";
-import { createContainer, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, startContainer, stopContainer } from "../clients/docker";
+import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
 import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectObsWsPassword } from "../services/obs-config";
-import { decryptPassword } from "../utils/crypto";
+import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
+import { restartInstance } from "../services/instance-lifecycle";
 import { proxyRoute } from "./instances";
 import { consumeTicket, issueTicket } from "../services/ws-tickets";
 import { KeyedRateLimiter } from "../utils/rate-limit";
@@ -182,45 +182,10 @@ admin.post("/instances/:id/start", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
 
-  await pullObsConfig(instance.user_id, instance.id).catch((e) =>
-    log("warn", "obs config pull failed, starting with empty config", {
-      instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
-
-  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
-    return c.json({ error: "Instance is missing OBS WebSocket password." }, 500);
-  }
-  const obsWsPassword = decryptPassword(
-    instance.obs_ws_password_ciphertext,
-    instance.obs_ws_password_iv,
-    instance.obs_ws_password_tag,
-  );
-
-  await injectObsWsPassword(instance.id, obsWsPassword);
-
-  let containerId: string | null = null;
   try {
-    containerId = await createContainer({
-      instanceId: instance.id,
-      containerName: instance.container_name,
-      resolution: instance.resolution,
-      obsWsPassword,
-      memory_mb: instance.memory_mb,
-      cpu_quota: instance.cpu_quota,
-      shm_size: instance.shm_size,
-    });
-    await startContainer(containerId);
-    const updated = await updateInstance(id, { container_id: containerId, status: "running" });
+    const updated = await restartInstance(instance);
     return c.json(updated);
   } catch (err) {
-    await updateInstance(id, { status: "error" });
-    if (containerId) {
-      await removeContainer(containerId).catch((e) =>
-        debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`)
-      );
-    }
     return c.json({ error: (err as Error).message }, 500);
   }
 });

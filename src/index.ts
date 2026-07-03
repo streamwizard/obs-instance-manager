@@ -5,11 +5,13 @@ import instances from "./routes/instances";
 import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
 import { debug, log } from "./utils/logger";
-import { reconcileContainers, registerConfigHandlers, startEventListener } from "./clients/docker";
+import { reconcileContainers, registerConfigHandlers, registerInstanceLifecycleHandlers, startEventListener } from "./clients/docker";
+import { listNodeInstances } from "./clients/supabase";
 import { pushObsConfig, removeLocalConfig } from "./services/obs-config";
+import { restartInstance } from "./services/instance-lifecycle";
 import { checkS3 } from "./clients/s3";
 import { NODE_ID } from "./utils/node";
-import { MAX_REQUEST_BODY_BYTES } from "./utils/constants";
+import { CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES } from "./utils/constants";
 import type { AppVariables } from "./types";
 
 const app = new Hono<{ Variables: AppVariables }>();
@@ -72,12 +74,41 @@ const port = Number(process.env.PORT) || 3000;
 await checkS3();
 
 registerConfigHandlers(pushObsConfig, removeLocalConfig);
+registerInstanceLifecycleHandlers(restartInstance);
 
 await reconcileContainers(NODE_ID).catch((err) =>
   log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),
 );
 
 startEventListener();
+
+// Bounds config-loss exposure from a hard crash (see CONFIG_AUTOSAVE_INTERVAL_MS)
+// by periodically pushing every running instance's config to S3, same as a
+// clean /stop does. Failures are per-instance and non-fatal -- one bad push
+// shouldn't skip the rest or crash the interval.
+setInterval(() => {
+  autosaveRunningInstanceConfigs().catch((err) =>
+    log("error", "config autosave pass failed", { error: (err as Error).message }),
+  );
+}, CONFIG_AUTOSAVE_INTERVAL_MS);
+
+async function autosaveRunningInstanceConfigs(): Promise<void> {
+  const nodeInstances = await listNodeInstances(NODE_ID);
+  const running = nodeInstances.filter((i) => i.status === "running" && i.container_id);
+
+  await Promise.all(
+    running.map((instance) =>
+      pushObsConfig(instance.user_id, instance.id).catch((e) =>
+        log("warn", "config autosave push failed", {
+          instanceId: instance.id,
+          error: (e as Error).message,
+        }),
+      ),
+    ),
+  );
+
+  debug("autosave", `pushed config for ${running.length} running instance(s)`);
+}
 
 const server = Bun.serve({
   port,

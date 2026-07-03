@@ -171,10 +171,29 @@ print(f'PCI:{int(bus, 16)}:{int(dev, 16)}:{int(func, 16)}')
   VRAM_TOTAL_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1)"
   RAM_TOTAL_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   CPU_CORES="$(nproc)"
+  GPU_MODEL="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)"
+  # Total capacity of the root filesystem, where /data (obs-configs/plugins) lives.
+  STORAGE_TOTAL_MB="$(df -BM --output=size / | tail -n1 | tr -dc '0-9')"
+
+  # Built via argv (not string-interpolated into the python source) so a GPU
+  # model name or token containing quotes can't break the JSON encoding.
+  CLAIM_BODY="$(python3 -c "
+import json, sys
+token, gpu_bus_id, vram_total_mb, ram_total_mb, cpu_cores, gpu_model, storage_total_mb = sys.argv[1:8]
+print(json.dumps({
+    'token': token,
+    'gpu_bus_id': gpu_bus_id,
+    'vram_total_mb': int(vram_total_mb),
+    'ram_total_mb': int(ram_total_mb),
+    'cpu_cores': int(cpu_cores),
+    'gpu_model': gpu_model,
+    'storage_total_mb': int(storage_total_mb),
+}))
+" "$TOKEN" "$GPU_BUS_ID" "$VRAM_TOTAL_MB" "$RAM_TOTAL_MB" "$CPU_CORES" "$GPU_MODEL" "$STORAGE_TOTAL_MB")"
 
   CLAIM_RESPONSE="$(curl_with_backoff -fsSL -X POST "$REST_API_URL/api/nodes/claim" \
     -H "Content-Type: application/json" \
-    -d "{\"token\":\"$TOKEN\",\"gpu_bus_id\":\"$GPU_BUS_ID\",\"vram_total_mb\":$VRAM_TOTAL_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"cpu_cores\":$CPU_CORES}")" \
+    -d "$CLAIM_BODY")" \
     || die "Node claim request to $REST_API_URL failed after retries. Check the URL/token and that rest-api's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
 
   python3 - "$ENV_FILE" "$CLAIM_RESPONSE" "$GPU_BUS_ID" <<'PY'
@@ -208,6 +227,24 @@ with open(env_path, "w") as f:
     f.write("DEBUG=\n")
 PY
   log "Linked. Node ID written to $ENV_FILE."
+
+  # The panel computed this hostname from the node's admin-chosen name and
+  # already persisted it on the obs_nodes row, so applying it here is what
+  # makes a freshly imaged, generically-named VM self-identify correctly with
+  # zero manual admin steps -- no separate rename step, no drift between what
+  # the panel shows and what the machine is actually called.
+  NODE_HOSTNAME="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('hostname',''))" "$CLAIM_RESPONSE")"
+  if [ -n "$NODE_HOSTNAME" ]; then
+    log "Setting hostname to $NODE_HOSTNAME..."
+    hostnamectl set-hostname "$NODE_HOSTNAME"
+    if grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+      sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$NODE_HOSTNAME/" /etc/hosts
+    else
+      echo -e "127.0.1.1\t$NODE_HOSTNAME" >> /etc/hosts
+    fi
+  else
+    warn "Claim response did not include a hostname; leaving the host's hostname unchanged."
+  fi
 else
   if [ ! -f "$ENV_FILE" ]; then
     cp "$REPO_DIR/.env.example" "$ENV_FILE"

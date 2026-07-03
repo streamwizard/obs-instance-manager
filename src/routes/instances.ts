@@ -28,9 +28,10 @@ import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
 import { syncPlugins } from "../services/plugins";
-import { decryptPassword } from "../utils/crypto";
+import { encryptPassword, generateVncPassword } from "../utils/crypto";
 import { getStreamKey } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
+import { restartInstance } from "../services/instance-lifecycle";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 // Upstream connect must complete within this window or the proxy gives up
@@ -260,6 +261,15 @@ instances.post("/", async (c) => {
     return c.json({ error: "Node has reached max_instances capacity" }, 409);
   }
 
+  // Consumer NVIDIA drivers cap concurrent NVENC sessions (8 as of the 500+
+  // driver series) independent of VRAM headroom -- Quadro/RTX-A cards have no
+  // such cap, which is why this is a per-node config value (null = unlimited)
+  // rather than a hardcoded constant. One instance == one NVENC session in
+  // this architecture, so activeCount (already computed above) is exact.
+  if (node.max_encoder_sessions !== null && activeCount >= node.max_encoder_sessions) {
+    return c.json({ error: "Node has reached max_encoder_sessions capacity" }, 409);
+  }
+
   const currentVram = await sumAllocatedVram(node.id);
   if (currentVram + planLimits.vram_mb > node.total_vram_mb) {
     return c.json(
@@ -270,6 +280,13 @@ instances.post("/", async (c) => {
 
   const instanceId = crypto.randomUUID();
   const containerName = `obs-instance-${instanceId}`;
+
+  // Generated and encrypted server-side (unlike obsWsPassword, which the
+  // client generates/encrypts today) since the VNC password never needs to
+  // be seen by the panel -- x11vnc's RFB auth is purely an internal
+  // obs-net-isolation measure, not something the end user interacts with.
+  const vncPassword = generateVncPassword();
+  const encryptedVncPassword = encryptPassword(vncPassword);
 
   const instance = await insertInstance({
     id: instanceId,
@@ -287,6 +304,9 @@ instances.post("/", async (c) => {
     obs_ws_password_ciphertext: obsWsPasswordCiphertext,
     obs_ws_password_iv: obsWsPasswordIv,
     obs_ws_password_tag: obsWsPasswordTag,
+    vnc_password_ciphertext: encryptedVncPassword.ciphertext,
+    vnc_password_iv: encryptedVncPassword.iv,
+    vnc_password_tag: encryptedVncPassword.tag,
   });
 
   let containerId: string | null = null;
@@ -316,6 +336,7 @@ instances.post("/", async (c) => {
       containerName,
       resolution: planLimits.resolution,
       obsWsPassword,
+      vncPassword,
       memory_mb: planLimits.memory_mb,
       cpu_quota: planLimits.cpu_quota,
       shm_size: planLimits.shm_size,
@@ -347,57 +368,10 @@ instances.post("/:id/start", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
 
-  await Promise.all([
-    pullObsConfig(instance.user_id, instance.id).catch((e) =>
-      log("warn", "obs config pull failed, starting with empty config", {
-        instanceId: instance.id,
-        error: (e as Error).message,
-      })
-    ),
-    syncPlugins().catch((e) =>
-      log("warn", "plugin sync failed, starting with existing local plugins", {
-        instanceId: instance.id,
-        error: (e as Error).message,
-      })
-    ),
-  ]);
-
-  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
-    return c.json({ error: "Instance is missing OBS WebSocket password." }, 500);
-  }
-
-  const obsWsPassword = decryptPassword(
-    instance.obs_ws_password_ciphertext,
-    instance.obs_ws_password_iv,
-    instance.obs_ws_password_tag,
-  );
-
-  await injectObsWsPassword(instance.id, obsWsPassword);
-
-  const streamKey = await getStreamKey(instance.user_id);
-  if (streamKey) await injectStreamKey(instance.id, streamKey);
-
-  let containerId: string | null = null;
   try {
-    containerId = await createContainer({
-      instanceId: instance.id,
-      containerName: instance.container_name,
-      resolution: instance.resolution,
-      obsWsPassword,
-      memory_mb: instance.memory_mb,
-      cpu_quota: instance.cpu_quota,
-      shm_size: instance.shm_size,
-    });
-    await startContainer(containerId);
-    const updated = await updateInstance(id, { container_id: containerId, status: "running" });
+    const updated = await restartInstance(instance);
     return c.json(updated);
   } catch (err) {
-    await updateInstance(id, { status: "error" });
-    if (containerId) {
-      await removeContainer(containerId).catch((e) =>
-        debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`)
-      );
-    }
     return c.json({ error: (err as Error).message }, 500);
   }
 });

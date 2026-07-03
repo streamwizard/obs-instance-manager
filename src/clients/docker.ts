@@ -1,9 +1,9 @@
 import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
 import { PLUGINS_LOCAL_DIR } from "../services/plugins";
-import { listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
+import { getInstanceByIdAdmin, listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import { StreamwizardApi } from "./streamwizard-api";
-import type { InstanceStatus } from "../types";
+import type { Instance, InstanceStatus } from "../types";
 
 // Imported lazily to avoid a circular dependency (obs-config imports s3, s3
 // imports logger, docker imports supabase — all fine, but obs-config also
@@ -17,6 +17,18 @@ export function registerConfigHandlers(
 ): void {
   _pushObsConfig = push;
   _removeLocalConfig = remove;
+}
+
+// Same lazy-registration trick as registerConfigHandlers above, for the same
+// reason: instance-lifecycle.ts imports createContainer/startContainer/
+// removeContainer from this module, so this module can't statically import
+// restartInstance back from there without a cycle.
+let _restartInstance: ((instance: Instance) => Promise<Instance>) | null = null;
+
+export function registerInstanceLifecycleHandlers(
+  restart: (instance: Instance) => Promise<Instance>
+): void {
+  _restartInstance = restart;
 }
 
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
@@ -80,6 +92,7 @@ export interface CreateContainerOptions {
   containerName: string;
   resolution: string;
   obsWsPassword: string;
+  vncPassword: string;
   memory_mb: number;
   cpu_quota: number;
   shm_size: string;
@@ -88,7 +101,7 @@ export interface CreateContainerOptions {
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
-  const { instanceId, containerName, resolution, obsWsPassword, memory_mb, cpu_quota, shm_size } = opts;
+  const { instanceId, containerName, resolution, obsWsPassword, vncPassword, memory_mb, cpu_quota, shm_size } = opts;
 
   await ensureImagePulled(IMAGE);
 
@@ -103,6 +116,7 @@ export async function createContainer(
       `NOVNC_PORT=${NOVNC_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
       `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
+      `VNC_PASSWORD=${vncPassword}`,
       // :10, not :0 -- :0 is reserved for the shared gpu-xserver's real
       // Xorg (see docker-compose.yml); each instance's own Xvfb lives here.
       `DISPLAY_NUM=:10`,
@@ -138,6 +152,10 @@ export async function createContainer(
         // Read-only: this instance only ever consumes the shared gpu-xserver's
         // X11 socket (a static service in docker-compose.yml), never creates it.
         `${GPU_XSOCKET_VOLUME}:/opt/gpu-xsocket:ro`,
+        // Persists whatever the user drops into OBS's media folder (Add
+        // Source > local files, etc.) across stop/start -- synced to S3
+        // alongside the obs-studio config, see obs-config.ts.
+        `/data/obs-configs/${instanceId}/media:/home/app/media`,
       ],
 
       DeviceRequests: [
@@ -212,12 +230,21 @@ export async function getContainerStatus(containerId: string): Promise<DockerSta
 
 export interface ReconcileInstanceResult {
   instance_id: string;
-  action: "marked_error" | "marked_running" | "marked_stopped" | "no_change";
+  action: "marked_error" | "marked_running" | "marked_stopped" | "restarted" | "restart_failed" | "no_change";
 }
+
+// Sequential delay between restart attempts during reconciliation, so a node
+// coming back up after an outage doesn't slam the GPU/CPU with N simultaneous
+// OBS launches at once.
+const RESTART_STAGGER_MS = 3000;
 
 // Boot-time reconciliation: cross-checks running OBS containers against
 // the DB so a restarted API process doesn't operate on stale state (e.g.
 // after a crash mid-create, or a container stopped/removed out-of-band).
+// Instances the DB still expects to be running are auto-resumed (see
+// restartInstance in instance-lifecycle.ts) rather than just marked error,
+// so a node reboot or manager crash doesn't strand every paying customer's
+// session until an operator notices.
 export async function reconcileContainers(nodeId: string): Promise<void> {
   const nodeInstances = await listNodeInstances(nodeId);
   const knownContainerIds = new Set(
@@ -249,7 +276,29 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
     const status = await getContainerStatus(instance.container_id);
     if (status === "unknown") continue;
 
-    if (status === "not_found" && instance.status !== "error") {
+    if (status === "not_found" && instance.status === "running") {
+      log("warn", "instance container missing but DB expects it running, attempting restart", {
+        instanceId: instance.id,
+      });
+      if (_restartInstance) {
+        try {
+          await _restartInstance(instance);
+          log("info", "instance auto-resumed after reconcile", { instanceId: instance.id });
+          instanceResults.push({ instance_id: instance.id, action: "restarted" });
+        } catch (e) {
+          log("error", "instance auto-resume failed, marked error", {
+            instanceId: instance.id,
+            error: (e as Error).message,
+          });
+          instanceResults.push({ instance_id: instance.id, action: "restart_failed" });
+        }
+        await new Promise((resolve) => setTimeout(resolve, RESTART_STAGGER_MS));
+      } else {
+        await updateInstance(instance.id, { status: "error" });
+        log("warn", "instance container missing, marked error (no restart handler registered)", { instanceId: instance.id });
+        instanceResults.push({ instance_id: instance.id, action: "marked_error" });
+      }
+    } else if (status === "not_found" && instance.status !== "error") {
       await updateInstance(instance.id, { status: "error" });
       log("warn", "instance container missing, marked error", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_error" });
@@ -292,14 +341,39 @@ async function reportReconcile(
 
 const EVENT_RECONNECT_DELAY_MS = 5000;
 
+// The one real GPU-bound Xorg, shared by every instance via VirtualGL (see
+// docker-compose.yml). If it restarts, every instance's render connection to
+// it dies and OBS crashes inside each of them -- container name is fixed
+// (one compose stack = one machine = one GPU), so this can be matched by name.
+const GPU_XSERVER_CONTAINER_NAME = "gpu-xserver";
+
+// If an obs-instance-* container dies within this long after gpu-xserver
+// itself died, its crash is attributed to the gpu-xserver outage and it's
+// queued for auto-resume once gpu-xserver is back, rather than left "error"
+// for an operator to notice.
+const GPU_XSERVER_DIE_CORRELATION_WINDOW_MS = 15_000;
+
+// Grace period after gpu-xserver's container "start" event before attempting
+// to resume affected instances -- entrypoint.sh's own internal Xorg-readiness
+// wait (see ROLE=gpu-xserver) budgets up to ~20s, so this leaves margin for
+// the shared X server to actually be usable before instances try to attach.
+const GPU_XSERVER_RECOVERY_GRACE_MS = 25_000;
+
+let gpuXserverDownSince: number | null = null;
+// instanceId -> nodeId, so recovery can look the instance up again (state
+// may have moved on) without needing to keep a live Instance object around.
+const pendingGpuRecovery = new Map<string, string>();
+
 // Live counterpart to reconcileContainers: subscribes to Docker's event
 // stream so a container that dies between reconciliation runs (crash, OOM
 // kill, manual `docker stop` outside the API) updates the DB immediately
-// instead of waiting for the next restart. Reconnects on stream errors/EOF
-// since a dropped connection would otherwise silently stop all live updates.
+// instead of waiting for the next restart. Also watches gpu-xserver's own
+// die/start events to auto-resume instances that crashed because of it (see
+// GPU_XSERVER_CONTAINER_NAME above). Reconnects on stream errors/EOF since a
+// dropped connection would otherwise silently stop all live updates.
 export function startEventListener(): void {
   docker.getEvents(
-    { filters: JSON.stringify({ type: ["container"], event: ["die"] }) },
+    { filters: JSON.stringify({ type: ["container"], event: ["die", "start"] }) },
     (err, stream) => {
       if (err || !stream) {
         log("error", "failed to attach docker event listener, retrying", {
@@ -315,6 +389,9 @@ export function startEventListener(): void {
       stream.on("data", (chunk: Buffer) => {
         for (const line of chunk.toString("utf8").split("\n")) {
           if (!line.trim()) continue;
+          handleGpuXserverEvent(line).catch((e) =>
+            debug("docker", `failed to handle gpu-xserver event: ${e?.message ?? e}`)
+          );
           handleContainerDieEvent(line).catch((e) =>
             debug("docker", `failed to handle container die event: ${e?.message ?? e}`)
           );
@@ -339,6 +416,10 @@ export function startEventListener(): void {
 
 async function handleContainerDieEvent(rawLine: string): Promise<void> {
   const event = JSON.parse(rawLine);
+  // The event stream now also carries "start" events (for gpu-xserver
+  // recovery, see handleGpuXserverEvent/startEventListener) -- this handler
+  // only cares about "die".
+  if (event.Action !== "die") return;
 
   const containerName: string = (event.Actor?.Attributes?.name ?? "").replace(/^\//, "");
   if (!containerName.startsWith("obs-instance-")) return;
@@ -360,6 +441,22 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
     status,
   });
 
+  // If this died shortly after gpu-xserver itself went down, its crash is
+  // almost certainly a side effect of losing the shared X/VirtualGL
+  // connection rather than something wrong with the instance itself -- queue
+  // it for auto-resume once gpu-xserver is confirmed back (see
+  // handleGpuXserverEvent).
+  if (
+    status === "error" &&
+    gpuXserverDownSince !== null &&
+    Date.now() - gpuXserverDownSince <= GPU_XSERVER_DIE_CORRELATION_WINDOW_MS
+  ) {
+    pendingGpuRecovery.set(updated.id, updated.node_id);
+    log("info", "instance crash attributed to gpu-xserver outage, queued for auto-resume", {
+      instanceId: updated.id,
+    });
+  }
+
   // Push config to S3 for containers that died out-of-band (not via the
   // /stop route, which handles this itself). If container_id was already
   // null the record wasn't found above, so this only runs for genuine
@@ -377,5 +474,69 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
         error: (e as Error).message,
       })
     );
+  }
+}
+
+// Tracks gpu-xserver's own lifecycle (die/start) to correlate and auto-heal
+// the instance crashes it causes -- see GPU_XSERVER_CONTAINER_NAME,
+// GPU_XSERVER_DIE_CORRELATION_WINDOW_MS and the queuing logic at the end of
+// handleContainerDieEvent above.
+async function handleGpuXserverEvent(rawLine: string): Promise<void> {
+  const event = JSON.parse(rawLine);
+
+  const containerName: string = (event.Actor?.Attributes?.name ?? "").replace(/^\//, "");
+  if (containerName !== GPU_XSERVER_CONTAINER_NAME) return;
+
+  if (event.Action === "die") {
+    gpuXserverDownSince = Date.now();
+    log("warn", "gpu-xserver died, instance crashes over the next window will be attributed to it", {
+      correlationWindowMs: GPU_XSERVER_DIE_CORRELATION_WINDOW_MS,
+    });
+    return;
+  }
+
+  if (event.Action !== "start") return;
+
+  log("info", "gpu-xserver restarted, will attempt to resume affected instances after grace period", {
+    graceMs: GPU_XSERVER_RECOVERY_GRACE_MS,
+    pending: pendingGpuRecovery.size,
+  });
+  gpuXserverDownSince = null;
+
+  setTimeout(() => {
+    recoverInstancesAfterGpuXserverRestart().catch((e) =>
+      log("error", "gpu-xserver recovery pass failed", { error: (e as Error).message })
+    );
+  }, GPU_XSERVER_RECOVERY_GRACE_MS);
+}
+
+async function recoverInstancesAfterGpuXserverRestart(): Promise<void> {
+  if (pendingGpuRecovery.size === 0) return;
+  if (!_restartInstance) {
+    log("warn", "gpu-xserver recovery skipped, no restart handler registered", {
+      pending: pendingGpuRecovery.size,
+    });
+    return;
+  }
+
+  const instanceIds = [...pendingGpuRecovery.keys()];
+  pendingGpuRecovery.clear();
+
+  for (const instanceId of instanceIds) {
+    const instance = await getInstanceByIdAdmin(instanceId);
+    // Already handled some other way (manually restarted, deleted, etc.)
+    // since it was queued -- nothing to do.
+    if (!instance || instance.status === "running") continue;
+
+    try {
+      await _restartInstance(instance);
+      log("info", "instance auto-resumed after gpu-xserver recovery", { instanceId });
+    } catch (e) {
+      log("error", "instance auto-resume after gpu-xserver recovery failed", {
+        instanceId,
+        error: (e as Error).message,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, RESTART_STAGGER_MS));
   }
 }

@@ -10,6 +10,10 @@ export interface Node {
   total_vram_mb: number;
   shm_size: string;
   gpu_bus_id: string;
+  // Consumer NVIDIA drivers cap concurrent NVENC sessions (8 as of the 500+
+  // driver series) independent of VRAM headroom; Quadro/RTX-A cards have no
+  // such cap. null means unlimited (pro-card nodes).
+  max_encoder_sessions: number | null;
   created_at: string;
 }
 
@@ -29,6 +33,9 @@ export interface Instance {
   obs_ws_password_ciphertext: string | null;
   obs_ws_password_iv: string | null;
   obs_ws_password_tag: string | null;
+  vnc_password_ciphertext: string | null;
+  vnc_password_iv: string | null;
+  vnc_password_tag: string | null;
   created_at: string;
 }
 
