@@ -18,7 +18,11 @@ export class InstanceLifecycleError extends Error {}
 // Resolves the plaintext VNC password for this instance, generating and
 // persisting a new one if this instance predates the VNC-password feature
 // (vnc_password_ciphertext is null on rows created before this change).
-async function resolveVncPassword(instance: Instance): Promise<string> {
+// Exported for the novnc ws-ticket routes: the RFB handshake happens
+// directly between the browser's VNC client and x11vnc (the API's WS proxy
+// is a blind byte relay), so the browser needs this password out-of-band --
+// there's no other way for it to authenticate the connection.
+export async function resolveVncPassword(instance: Instance): Promise<string> {
   if (instance.vnc_password_ciphertext && instance.vnc_password_iv && instance.vnc_password_tag) {
     return decryptPassword(instance.vnc_password_ciphertext, instance.vnc_password_iv, instance.vnc_password_tag);
   }

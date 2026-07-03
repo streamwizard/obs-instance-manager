@@ -31,7 +31,7 @@ import { syncPlugins } from "../services/plugins";
 import { encryptPassword, generateVncPassword } from "../utils/crypto";
 import { getStreamKey } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
-import { restartInstance } from "../services/instance-lifecycle";
+import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 // Upstream connect must complete within this window or the proxy gives up
@@ -89,6 +89,17 @@ instances.post("/:id/ws-ticket", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
   const ticket = issueTicket({ userId, scope, instanceId: id });
+
+  // The novnc WS proxy is a blind byte relay -- the actual RFB auth handshake
+  // happens directly between the browser's VNC client and x11vnc inside the
+  // container, so the browser needs the password to complete it itself.
+  // Riding along on this response (not the ticket/URL) keeps it out of logs
+  // and off the WS URL query string.
+  if (scope === "novnc") {
+    const vncPassword = await resolveVncPassword(instance);
+    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword });
+  }
+
   return c.json({ ticket, expires_in: 30 });
 });
 

@@ -8,7 +8,7 @@ import { authMiddleware } from "../middleware/auth";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
-import { restartInstance } from "../services/instance-lifecycle";
+import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
 import { proxyRoute } from "./instances";
 import { consumeTicket, issueTicket } from "../services/ws-tickets";
 import { KeyedRateLimiter } from "../utils/rate-limit";
@@ -168,6 +168,15 @@ admin.post("/instances/:id/ws-ticket", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
   const ticket = issueTicket({ userId, scope, instanceId: id });
+
+  // See the matching comment in routes/instances.ts's ws-ticket handler --
+  // the browser's VNC client needs this to complete the RFB auth handshake
+  // with x11vnc itself, since the WS proxy is a blind byte relay.
+  if (scope === "novnc") {
+    const vncPassword = await resolveVncPassword(instance);
+    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword });
+  }
+
   return c.json({ ticket, expires_in: 30 });
 });
 
