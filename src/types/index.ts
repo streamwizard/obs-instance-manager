@@ -14,6 +14,10 @@ export interface Node {
   // driver series) independent of VRAM headroom; Quadro/RTX-A cards have no
   // such cap. null means unlimited (pro-card nodes).
   max_encoder_sessions: number | null;
+  // SHA-256 hash of this node's obs_command key. The obs-auto-switcher presents
+  // the plaintext as a Bearer on the /obs route; we only ever hold the hash.
+  // null when no command key has been provisioned yet.
+  command_key_hash: string | null;
   created_at: string;
 }
 
@@ -65,10 +69,18 @@ export interface HostMetrics {
   gpu_util_pct: number;
   mem_controller_util_pct: number;
   nvenc_avg_fps: number;
+  // Active NVENC encode sessions. Distinguishes idle from streaming
+  // instances: averageFps reads 0 with zero sessions, so alerting on encode
+  // FPS is only meaningful while this is > 0.
+  nvenc_sessions: number;
   gpu_temp_c: number;
   cpu_pct: number;
   ram_used_mb: number;
   ram_total_mb: number;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
+  /** Root filesystem usage; omitted when statfs fails. */
+  disk_used_pct?: number;
 }
 
 export interface ContainerMetrics {
@@ -76,6 +88,8 @@ export interface ContainerMetrics {
   ram_used_mb: number;
   ram_limit_mb: number;
   vram_used_mb: number;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
 }
 
 export interface MetricsPayload {

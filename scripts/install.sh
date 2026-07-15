@@ -1,5 +1,49 @@
 #!/usr/bin/env bash
 #
+#                   .++==++-.
+#                  -*-    .-++.
+#                .*+         :*=
+#               +*:            #-
+#             =*-              :%
+#          .=*=                 *=
+#       .-==:    .:-++.         .%
+#   .-+#*=-.:-====--%            ++
+#   .:-------:.     #:            %.
+#                   #-            =*
+#                  .#              #.
+#                  +:              :+
+#                 --                =.
+#                .:                  :
+#    ..:::..                             ...
+# -==-::.                                 ..:---.
+# *+:.                                        .:=+-
+#  .-=====--::...                                .+%
+#        ..::--===========-------------------=====-.
+#                       ....:::::::::::.::....
+#           --:::                     .::.=.
+#           == .+:     .::-::-:      :+. :+
+#            +   --:.:--:  .. :--:..-=  .+
+#            .+    ::.           .::.  .+
+#             -=                       +.
+#              -=                     +.
+#               :=                .  +.
+#                .=*-             *-+.
+#                  :+.            -=
+#                   :*+.          =:
+#                    :+.         =-
+#                    .=       + =-
+#                    -=      =-*-
+#                     +     +. .
+#                     .+.  :=
+#                      .=- +.
+#                        :-*
+#
+#  ___ _                   __      ___                _ 
+# / __| |_ _ _ ___ __ _ _ _\ \    / (_)_____ _ _ _ __| |
+# \__ \  _| '_/ -_) _` | '  \ \/\/ /| |_ / _` | '_/ _` |
+# |___/\__|_| \___\__,_|_|_|_\_/\_/ |_/__\__,_|_| \__,_|
+#
+#
 # obs-instance-manager node installer (Wings-style).
 #
 # Provisions an Ubuntu host to run obs-instance-manager + cAdvisor as a
@@ -32,9 +76,9 @@ REPO_DIR="/opt/obs-instance-manager"
 SERVICE_USER="obs"
 DO_START="false"
 
-log()  { echo "[install] $*"; }
-warn() { echo "[install] WARNING: $*" >&2; }
-die()  { echo "[install] ERROR: $*" >&2; exit 1; }
+log()  { echo "[streamwizard] [install] $*"; }
+warn() { echo "[streamwizard] [install] WARNING: $*" >&2; }
+die()  { echo "[streamwizard] [install] ERROR: $*" >&2; exit 1; }
 
 # Retries a curl call with exponential backoff (1s, 2s, 4s, ... up to 10 tries),
 # the same resilience Wings applies to its own outbound panel calls so a
@@ -61,7 +105,7 @@ for arg in "$@"; do
     --repo-dir=*) REPO_DIR="${arg#*=}" ;;
     --service-user=*) SERVICE_USER="${arg#*=}" ;;
     --start) DO_START="true" ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '47,66p' "$0"; exit 0 ;;
     *) die "Unknown option: $arg" ;;
   esac
 done
