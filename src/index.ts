@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import admin, { notifyMetricsDrain } from "./routes/admin";
 import instances from "./routes/instances";
+import obs from "./routes/obs";
 import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
 import { debug, log } from "./utils/logger";
@@ -12,6 +13,8 @@ import { restartInstance } from "./services/instance-lifecycle";
 import { checkS3 } from "./clients/s3";
 import { NODE_ID } from "./utils/node";
 import { CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES } from "./utils/constants";
+import { startMetricsPersistence } from "./services/metrics-persist";
+import { loadCommandKeyHash, startCommandKeyRefresh } from "./services/command-key";
 import type { AppVariables } from "./types";
 
 const app = new Hono<{ Variables: AppVariables }>();
@@ -68,6 +71,7 @@ app.get("/health", (c) => c.json({ ok: true, timestamp: new Date().toISOString()
 app.route("/instances", instances);
 app.route("/metrics", metrics);
 app.route("/admin", admin);
+app.route("/obs", obs);
 
 const port = Number(process.env.PORT) || 3000;
 
@@ -81,6 +85,13 @@ await reconcileContainers(NODE_ID).catch((err) =>
 );
 
 startEventListener();
+
+startMetricsPersistence(NODE_ID);
+
+// Load this node's obs_command key hash so the /obs route can authenticate the
+// obs-auto-switcher, then keep it fresh so key rotations propagate live.
+await loadCommandKeyHash();
+startCommandKeyRefresh();
 
 // Bounds config-loss exposure from a hard crash (see CONFIG_AUTOSAVE_INTERVAL_MS)
 // by periodically pushing every running instance's config to S3, same as a

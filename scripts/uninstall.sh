@@ -1,5 +1,49 @@
 #!/usr/bin/env bash
 #
+#                   .++==++-.
+#                  -*-    .-++.
+#                .*+         :*=
+#               +*:            #-
+#             =*-              :%
+#          .=*=                 *=
+#       .-==:    .:-++.         .%
+#   .-+#*=-.:-====--%            ++
+#   .:-------:.     #:            %.
+#                   #-            =*
+#                  .#              #.
+#                  +:              :+
+#                 --                =.
+#                .:                  :
+#    ..:::..                             ...
+# -==-::.                                 ..:---.
+# *+:.                                        .:=+-
+#  .-=====--::...                                .+%
+#        ..::--===========-------------------=====-.
+#                       ....:::::::::::.::....
+#           --:::                     .::.=.
+#           == .+:     .::-::-:      :+. :+
+#            +   --:.:--:  .. :--:..-=  .+
+#            .+    ::.           .::.  .+
+#             -=                       +.
+#              -=                     +.
+#               :=                .  +.
+#                .=*-             *-+.
+#                  :+.            -=
+#                   :*+.          =:
+#                    :+.         =-
+#                    .=       + =-
+#                    -=      =-*-
+#                     +     +. .
+#                     .+.  :=
+#                      .=- +.
+#                        :-*
+#
+#  ___ _                   __      ___                _ 
+# / __| |_ _ _ ___ __ _ _ _\ \    / (_)_____ _ _ _ __| |
+# \__ \  _| '_/ -_) _` | '  \ \/\/ /| |_ / _` | '_/ _` |
+# |___/\__|_| \___\__,_|_|_|_\_/\_/ |_/__\__,_|_| \__,_|
+#
+#
 # obs-instance-manager node uninstaller. Reverses what scripts/install.sh
 # did, using the same defaults (service user, repo dir, network name) so it
 # undoes exactly what was set up.
@@ -45,9 +89,9 @@ PURGE_DOCKER="false"
 PURGE_NVIDIA_TOOLKIT="false"
 SKIP_CONFIRM="false"
 
-log()  { echo "[uninstall] $*"; }
-warn() { echo "[uninstall] WARNING: $*" >&2; }
-die()  { echo "[uninstall] ERROR: $*" >&2; exit 1; }
+log()  { echo "[streamwizard] [uninstall] $*"; }
+warn() { echo "[streamwizard] [uninstall] WARNING: $*" >&2; }
+die()  { echo "[streamwizard] [uninstall] ERROR: $*" >&2; exit 1; }
 
 for arg in "$@"; do
   case "$arg" in
@@ -62,7 +106,7 @@ for arg in "$@"; do
     --purge-nvidia-toolkit) PURGE_NVIDIA_TOOLKIT="true" ;;
     --all) REMOVE_UFW_RULE="true"; DISABLE_UFW="true"; PURGE_DOCKER="true"; PURGE_NVIDIA_TOOLKIT="true" ;;
     --yes) SKIP_CONFIRM="true" ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    -h|--help) sed -n '47,76p' "$0"; exit 0 ;;
     *) die "Unknown option: $arg" ;;
   esac
 done

@@ -25,6 +25,39 @@ async function getHostCpuPercent(): Promise<number> {
   return Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
 }
 
+const IGNORED_INTERFACE_PREFIXES = ["lo", "docker", "veth", "br-"];
+
+async function readNetDevTotals(): Promise<{ rxBytes: number; txBytes: number }> {
+  const text = await Bun.file("/proc/net/dev").text();
+  let rxBytes = 0;
+  let txBytes = 0;
+
+  for (const line of text.split("\n").slice(2)) {
+    const [ifaceRaw, statsRaw] = line.split(":");
+    if (!ifaceRaw || !statsRaw) continue;
+    const iface = ifaceRaw.trim();
+    if (IGNORED_INTERFACE_PREFIXES.some((prefix) => iface.startsWith(prefix))) continue;
+
+    const fields = statsRaw.trim().split(/\s+/).map(Number);
+    const [rx = 0, , , , , , , , tx = 0] = fields;
+    rxBytes += rx;
+    txBytes += tx;
+  }
+
+  return { rxBytes, txBytes };
+}
+
+async function getHostBandwidth(): Promise<{ rxBytesPerSec: number; txBytesPerSec: number }> {
+  const first = await readNetDevTotals();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const second = await readNetDevTotals();
+
+  return {
+    rxBytesPerSec: Math.max(0, (second.rxBytes - first.rxBytes) / 0.1),
+    txBytesPerSec: Math.max(0, (second.txBytes - first.txBytes) / 0.1),
+  };
+}
+
 async function getHostMemMb(): Promise<{ usedMb: number; totalMb: number }> {
   const text = await Bun.file("/proc/meminfo").text();
   const lines = Object.fromEntries(
@@ -52,15 +85,16 @@ interface NvidiaSmiGpuRow {
   gpu_util_pct: number;
   mem_controller_util_pct: number;
   nvenc_avg_fps: number;
+  nvenc_sessions: number;
   gpu_temp_c: number;
 }
 
 async function queryNvidiaSmiGpu(): Promise<NvidiaSmiGpuRow> {
-  const output = await Bun.$`nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu,utilization.memory,encoder.stats.averageFps,temperature.gpu --format=csv,noheader,nounits`.text();
+  const output = await Bun.$`nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu,utilization.memory,encoder.stats.averageFps,encoder.stats.sessionCount,temperature.gpu --format=csv,noheader,nounits`.text();
 
   const firstLine = output.trim().split("\n")[0] ?? "";
   const fields = firstLine.split(",").map((f) => f.trim());
-  const [name = "", vramUsed, vramTotal, gpuUtil, memUtil, nvencFps, temp] = fields;
+  const [name = "", vramUsed, vramTotal, gpuUtil, memUtil, nvencFps, nvencSessions, temp] = fields;
 
   return {
     name,
@@ -69,6 +103,7 @@ async function queryNvidiaSmiGpu(): Promise<NvidiaSmiGpuRow> {
     gpu_util_pct: Number(gpuUtil),
     mem_controller_util_pct: Number(memUtil),
     nvenc_avg_fps: Number(nvencFps) || 0,
+    nvenc_sessions: Number(nvencSessions) || 0,
     gpu_temp_c: Number(temp),
   };
 }
@@ -87,11 +122,28 @@ async function queryNvidiaSmiComputeApps(): Promise<Map<number, number>> {
   return map;
 }
 
+// Root filesystem usage the way df computes it: used / (used + available),
+// with "available" being the non-root-reserved blocks.
+async function getDiskUsedPct(): Promise<number | undefined> {
+  try {
+    const { statfs } = await import("node:fs/promises");
+    const stats = await statfs("/");
+    const used = stats.blocks - stats.bfree;
+    const denominator = used + stats.bavail;
+    if (denominator <= 0) return undefined;
+    return (used / denominator) * 100;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function getHostMetrics(): Promise<HostMetrics> {
-  const [gpu, cpuPct, mem] = await Promise.all([
+  const [gpu, cpuPct, mem, bandwidth, diskUsedPct] = await Promise.all([
     queryNvidiaSmiGpu(),
     getHostCpuPercent(),
     getHostMemMb(),
+    getHostBandwidth(),
+    getDiskUsedPct(),
   ]);
 
   return {
@@ -101,10 +153,14 @@ export async function getHostMetrics(): Promise<HostMetrics> {
     gpu_util_pct: gpu.gpu_util_pct,
     mem_controller_util_pct: gpu.mem_controller_util_pct,
     nvenc_avg_fps: gpu.nvenc_avg_fps,
+    nvenc_sessions: gpu.nvenc_sessions,
     gpu_temp_c: gpu.gpu_temp_c,
     cpu_pct: cpuPct,
     ram_used_mb: mem.usedMb,
     ram_total_mb: mem.totalMb,
+    rx_bytes_per_sec: bandwidth.rxBytesPerSec,
+    tx_bytes_per_sec: bandwidth.txBytesPerSec,
+    ...(diskUsedPct !== undefined ? { disk_used_pct: diskUsedPct } : {}),
   };
 }
 
@@ -120,7 +176,7 @@ export async function getContainerMetrics(
     container.top({}).catch(() => null),
   ]);
 
-  const { cpu_pct, ram_used_mb } = cpuRam;
+  const { cpu_pct, ram_used_mb, rx_bytes_per_sec, tx_bytes_per_sec } = cpuRam;
   const ram_limit_mb = ramLimitMb;
 
   let vram_used_mb = 0;
@@ -135,7 +191,7 @@ export async function getContainerMetrics(
     }
   }
 
-  return { cpu_pct, ram_used_mb, ram_limit_mb, vram_used_mb };
+  return { cpu_pct, ram_used_mb, ram_limit_mb, vram_used_mb, rx_bytes_per_sec, tx_bytes_per_sec };
 }
 
 export async function getAllMetrics(instances: Instance[]): Promise<MetricsPayload> {
