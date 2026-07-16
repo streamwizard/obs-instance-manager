@@ -81,6 +81,13 @@ export interface HostMetrics {
   tx_bytes_per_sec: number;
   /** Root filesystem usage; omitted when statfs fails. */
   disk_used_pct?: number;
+  // gpu_util_pct above is time-occupancy: it DROPS when clocks boost under
+  // encode load and excludes the NVENC ASIC entirely. These three are the
+  // honest load signals; omitted when the board reports "[N/A]".
+  /** NVENC ASIC busy %. */
+  encoder_util_pct?: number;
+  power_draw_w?: number;
+  sm_clock_mhz?: number;
 }
 
 export interface ContainerMetrics {

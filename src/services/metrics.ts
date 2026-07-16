@@ -87,14 +87,26 @@ interface NvidiaSmiGpuRow {
   nvenc_avg_fps: number;
   nvenc_sessions: number;
   gpu_temp_c: number;
+  /** NVENC ASIC busy % — the saturation signal for a streaming box.
+   *  utilization.gpu is time-occupancy and does NOT include the encoder. */
+  encoder_util_pct?: number;
+  power_draw_w?: number;
+  sm_clock_mhz?: number;
 }
 
-async function queryNvidiaSmiGpu(): Promise<NvidiaSmiGpuRow> {
-  const output = await Bun.$`nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu,utilization.memory,encoder.stats.averageFps,encoder.stats.sessionCount,temperature.gpu --format=csv,noheader,nounits`.text();
+/** Boards without a given sensor report "[N/A]"; that must become undefined,
+ *  not NaN — NaN would poison the Influx line protocol downstream. */
+function finiteOrUndefined(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
 
-  const firstLine = output.trim().split("\n")[0] ?? "";
-  const fields = firstLine.split(",").map((f) => f.trim());
-  const [name = "", vramUsed, vramTotal, gpuUtil, memUtil, nvencFps, nvencSessions, temp] = fields;
+/** Exported for tests. Parses one CSV row from the --query-gpu call below;
+ *  field order must match the query string exactly. */
+export function parseNvidiaSmiGpuRow(line: string): NvidiaSmiGpuRow {
+  const fields = line.split(",").map((f) => f.trim());
+  const [name = "", vramUsed, vramTotal, gpuUtil, memUtil, nvencFps, nvencSessions, temp, encoderUtil, powerDraw, smClock] = fields;
 
   return {
     name,
@@ -105,7 +117,16 @@ async function queryNvidiaSmiGpu(): Promise<NvidiaSmiGpuRow> {
     nvenc_avg_fps: Number(nvencFps) || 0,
     nvenc_sessions: Number(nvencSessions) || 0,
     gpu_temp_c: Number(temp),
+    encoder_util_pct: finiteOrUndefined(encoderUtil),
+    power_draw_w: finiteOrUndefined(powerDraw),
+    sm_clock_mhz: finiteOrUndefined(smClock),
   };
+}
+
+async function queryNvidiaSmiGpu(): Promise<NvidiaSmiGpuRow> {
+  const output = await Bun.$`nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu,utilization.memory,encoder.stats.averageFps,encoder.stats.sessionCount,temperature.gpu,utilization.encoder,power.draw,clocks.sm --format=csv,noheader,nounits`.text();
+
+  return parseNvidiaSmiGpuRow(output.trim().split("\n")[0] ?? "");
 }
 
 async function queryNvidiaSmiComputeApps(): Promise<Map<number, number>> {
@@ -161,6 +182,9 @@ export async function getHostMetrics(): Promise<HostMetrics> {
     rx_bytes_per_sec: bandwidth.rxBytesPerSec,
     tx_bytes_per_sec: bandwidth.txBytesPerSec,
     ...(diskUsedPct !== undefined ? { disk_used_pct: diskUsedPct } : {}),
+    ...(gpu.encoder_util_pct !== undefined ? { encoder_util_pct: gpu.encoder_util_pct } : {}),
+    ...(gpu.power_draw_w !== undefined ? { power_draw_w: gpu.power_draw_w } : {}),
+    ...(gpu.sm_clock_mhz !== undefined ? { sm_clock_mhz: gpu.sm_clock_mhz } : {}),
   };
 }
 
@@ -194,6 +218,23 @@ export async function getContainerMetrics(
   return { cpu_pct, ram_used_mb, ram_limit_mb, vram_used_mb, rx_bytes_per_sec, tx_bytes_per_sec };
 }
 
+// A container sample failure (usually cAdvisor unreachable) silently drops
+// that instance's obs_instance point every 10s tick; without a log trail this
+// looks like the pipeline was never implemented. Log per instance, throttled.
+const CONTAINER_METRICS_LOG_INTERVAL_MS = 5 * 60 * 1000;
+const containerMetricsLastLoggedAt = new Map<string, number>();
+
+function logContainerMetricsFailure(instanceId: string, err: unknown): void {
+  const now = Date.now();
+  const lastLogged = containerMetricsLastLoggedAt.get(instanceId) ?? 0;
+  if (now - lastLogged < CONTAINER_METRICS_LOG_INTERVAL_MS) return;
+  containerMetricsLastLoggedAt.set(instanceId, now);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(
+    `[metrics] container sample failed for instance ${instanceId} (no obs_instance point written; next log in ${CONTAINER_METRICS_LOG_INTERVAL_MS / 60000}m): ${message}`
+  );
+}
+
 export async function getAllMetrics(instances: Instance[]): Promise<MetricsPayload> {
   const runningInstances = instances.filter((i) => i.status === "running" && i.container_id);
 
@@ -218,7 +259,8 @@ export async function getAllMetrics(instances: Instance[]): Promise<MetricsPaylo
           ramLimitMb
         );
         return [instance.id, metrics] as const;
-      } catch {
+      } catch (err) {
+        logContainerMetricsFailure(instance.id, err);
         return null;
       }
     })
