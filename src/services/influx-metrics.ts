@@ -32,6 +32,15 @@ export function trackNodeMetrics(node: Node, host: HostMetrics, runningInstanceC
   if (host.disk_used_pct !== undefined) {
     point.floatField("disk_used_pct", host.disk_used_pct);
   }
+  if (host.encoder_util_pct !== undefined) {
+    point.floatField("encoder_util_pct", host.encoder_util_pct);
+  }
+  if (host.power_draw_w !== undefined) {
+    point.floatField("power_draw_w", host.power_draw_w);
+  }
+  if (host.sm_clock_mhz !== undefined) {
+    point.floatField("sm_clock_mhz", host.sm_clock_mhz);
+  }
 
   pushPoint(point);
 }
