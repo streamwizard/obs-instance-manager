@@ -59,10 +59,10 @@
 #   --token=TOKEN         One-time node claim token issued by the panel
 #   --allow-cidr=CIDR     Source CIDR allowed through the firewall (default: auto-detected LAN /24)
 #   --api-port=PORT       Host port for the API (default: 3000)
-#   --repo-url=URL        Git URL to clone (default: streamwizard/obs-instance-manager on GitHub)
-#   --repo-dir=DIR        Install directory (default: /opt/obs-instance-manager)
+#   --ref=REF             Branch/tag to fetch config files from (default: main)
+#   --repo-dir=DIR        Config directory holding docker-compose.yml/.env (default: /opt/obs-instance-manager)
 #   --service-user=NAME   Dedicated service account to run containers as (default: obs)
-#   --start               Bring the stack up at the end (default: build only)
+#   --start               Bring the stack up at the end (default: pull only)
 #   -h, --help            Show this help
 
 set -euo pipefail
@@ -71,7 +71,12 @@ REST_API_URL=""
 TOKEN=""
 ALLOW_CIDR=""
 API_PORT="3000"
-REPO_URL="https://github.com/streamwizard/obs-instance-manager.git"
+# Node installs don't clone the repo -- they just need docker-compose.yml and
+# .env.example, fetched straight from GitHub at the given ref. This keeps a
+# fresh node from needing the whole source tree just to run a prebuilt image
+# (see .github/workflows/build-images.yml).
+RAW_BASE="https://raw.githubusercontent.com/streamwizard/obs-instance-manager"
+REF="main"
 REPO_DIR="/opt/obs-instance-manager"
 SERVICE_USER="obs"
 DO_START="false"
@@ -101,7 +106,7 @@ for arg in "$@"; do
     --token=*) TOKEN="${arg#*=}" ;;
     --allow-cidr=*) ALLOW_CIDR="${arg#*=}" ;;
     --api-port=*) API_PORT="${arg#*=}" ;;
-    --repo-url=*) REPO_URL="${arg#*=}" ;;
+    --ref=*) REF="${arg#*=}" ;;
     --repo-dir=*) REPO_DIR="${arg#*=}" ;;
     --service-user=*) SERVICE_USER="${arg#*=}" ;;
     --start) DO_START="true" ;;
@@ -191,12 +196,19 @@ chown -R "$SERVICE_USER:$SERVICE_USER" /data/obs-configs
 mkdir -p /data/obs-plugins
 chown -R "$SERVICE_USER:$SERVICE_USER" /data/obs-plugins
 
-log "Fetching obs-instance-manager into $REPO_DIR..."
-if [ -d "$REPO_DIR/.git" ]; then
-  warn "$REPO_DIR already exists; leaving it as-is. Update it yourself (git pull) if you want the latest source."
-else
-  git clone "$REPO_URL" "$REPO_DIR"
-fi
+log "Fetching node config files (ref: $REF)..."
+mkdir -p "$REPO_DIR"
+# The compose file lives at the repo root with `env_file: .env`, so it needs no
+# path rewriting -- a node's flat $REPO_DIR has the same shape.
+curl_with_backoff -fsSL -o "$REPO_DIR/docker-compose.yml" "$RAW_BASE/$REF/docker-compose.yml" \
+  || die "Failed to fetch docker-compose.yml from ref '$REF'. Check the --ref value and your network connection."
+
+# So a later teardown doesn't need network access to fetch this again -- it's
+# just sitting right next to the compose file and .env it operates on.
+curl_with_backoff -fsSL -o "$REPO_DIR/uninstall.sh" "$RAW_BASE/$REF/scripts/uninstall.sh" \
+  || warn "Failed to fetch uninstall.sh; to uninstall later, fetch it manually from $RAW_BASE/$REF/scripts/uninstall.sh"
+chmod +x "$REPO_DIR/uninstall.sh" 2>/dev/null || true
+
 chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 
 ENV_FILE="$REPO_DIR/.env"
@@ -269,6 +281,10 @@ with open(env_path, "w") as f:
     f.write("PLUGINS_PATH=/data/obs-plugins\n")
     f.write("PANEL_ORIGIN=*\n")
     f.write("DEBUG=\n")
+    # Blank by default -- docker-compose.yml falls back to :latest. Set this to
+    # pin the node to a specific build (e.g. sha-abc1234) without editing
+    # docker-compose.yml.
+    f.write("OBS_IMAGE_TAG=\n")
 PY
   log "Linked. Node ID written to $ENV_FILE."
 
@@ -291,7 +307,8 @@ PY
   fi
 else
   if [ ! -f "$ENV_FILE" ]; then
-    cp "$REPO_DIR/.env.example" "$ENV_FILE"
+    curl_with_backoff -fsSL -o "$ENV_FILE" "$RAW_BASE/$REF/.env.example" \
+      || die "Failed to fetch .env.example from ref '$REF'. Check the --ref value and your network connection."
     warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example — fill in NODE_ID, NODE_API_KEY, REST_API_URL, SUPABASE_URL by hand before starting."
   else
     log "$ENV_FILE already exists, leaving it as-is."
@@ -304,8 +321,8 @@ log "Pre-pulling the OBS container image (multi-GB, can take a while)..."
 sudo -u "$SERVICE_USER" docker pull ghcr.io/streamwizard/obs-cloud-container:latest \
   || warn "Pre-pull of the OBS image failed; it will be pulled on first instance creation instead."
 
-log "Building images as $SERVICE_USER..."
-sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose build"
+log "Pulling the obs-instance-manager image as $SERVICE_USER..."
+sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && docker compose pull"
 
 ENV_COMPLETE="true"
 for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TOKEN_ENCRYPTION_KEY; do
@@ -320,7 +337,7 @@ if [ "$DO_START" = "true" ]; then
     warn "--start was given but $ENV_FILE is missing required values; not starting. Fill it in and run: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose up -d'"
   fi
 else
-  log "Build complete. Not starting (pass --start to bring the stack up automatically)."
+  log "Images pulled. Not starting (pass --start to bring the stack up automatically)."
   log "To start manually: sudo -u $SERVICE_USER bash -c 'cd $REPO_DIR && docker compose up -d'"
 fi
 
