@@ -40,9 +40,15 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      | sudo bash -s -- --rest-api-url=https://api.example.com --token=<claim-token>
    ```
 
+   Add `--ref=<branch-or-tag>` to install a node from something other than
+   `main`. It selects which `docker-compose.yml` / `.env.example` the script
+   fetches; the image tag itself is controlled separately by `OBS_IMAGE_TAG`
+   in the node's `.env`.
+
 3. **Admin runs that command on the new VM.** `install.sh` provisions the
    host (Docker, NVIDIA toolkit check, `obs-net` network, ufw, `obs` service
-   user, `/opt/obs-instance-manager` checkout) and then calls:
+   user, and `/opt/obs-instance-manager` holding the fetched
+   `docker-compose.yml`) and then calls:
 
    ```
    POST {rest-api-url}/api/nodes/claim

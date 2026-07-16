@@ -12,30 +12,55 @@ of how many concurrent OBS instances it runs.
 ## Setting up a new node
 
 `scripts/install.sh` provisions a fresh Ubuntu host end to end (Docker, the
-NVIDIA Container Toolkit, the `obs-net` Docker network, ufw rules, a
-dedicated `obs` service account, and this repo checked out under `/opt`):
+NVIDIA Container Toolkit, the `obs-net` Docker network, ufw rules, and a
+dedicated `obs` service account):
 
 ```bash
 sudo bash scripts/install.sh --start
 ```
 
+A node never gets a copy of this source. The installer fetches just
+`docker-compose.yml` and `.env.example` from GitHub into
+`/opt/obs-instance-manager` and pulls the prebuilt API image from GHCR
+(`ghcr.io/streamwizard/obs-instance-manager`), which CI builds on every merge
+to `main` (see `.github/workflows/build-images.yml`). Pass `--ref` to install
+from a branch or tag other than `main`.
+
 By default it only opens the firewall to your auto-detected LAN `/24` and
-expects you to fill in `.env` by hand afterward (`NODE_ID`,
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`). If a panel implementing
-the claim handshake in `docs/PANEL_INTEGRATION.md` exists, pass
-`--rest-api-url` and `--token` instead and the script links itself
-automatically. Run `scripts/install.sh --help` for all options.
+expects you to fill in `.env` by hand afterward (`NODE_ID`, `NODE_API_KEY`,
+`REST_API_URL`, `SUPABASE_URL`). If a panel implementing the claim handshake
+in `docs/PANEL_INTEGRATION.md` exists, pass `--rest-api-url` and `--token`
+instead and the script links itself automatically. Run
+`scripts/install.sh --help` for all options.
 
 This requires GPU passthrough already configured at the hypervisor level and
 the NVIDIA driver already installed on the host — the script checks for both
 and exits with instructions rather than attempting to install kernel drivers
 itself.
 
+### Updating a node
+
+```bash
+sudo -u obs bash -c 'cd /opt/obs-instance-manager && docker compose pull && docker compose up -d'
+```
+
+Nodes track the `:latest` tag, so this picks up whatever CI last built from
+`main`. Note that a plain restart or host reboot re-uses the cached image — a
+node only moves forward on an explicit `pull`.
+
+To pin a node to a specific build instead, set `OBS_IMAGE_TAG` in
+`/opt/obs-instance-manager/.env` to a tag CI published (e.g.
+`OBS_IMAGE_TAG=sha-abc1234`) and re-run the command above. Leave it blank to
+go back to tracking `:latest`. This never requires editing
+`docker-compose.yml`.
+
 ### Removing a node
 
 `scripts/uninstall.sh` reverses `install.sh`: it stops the stack, removes the
 OBS containers/images and the `obs-net` network, deletes `/data/obs-configs`
-and the repo checkout, and removes the `obs` service account.
+and `/opt/obs-instance-manager`, and removes the `obs` service account. The
+installer drops a copy at `/opt/obs-instance-manager/uninstall.sh`, so
+teardown needs no network access.
 
 ```bash
 sudo bash scripts/uninstall.sh
@@ -61,17 +86,23 @@ given.
 
 ## Running everything with Docker Compose
 
-The included `docker-compose.yml` builds the API image and runs it alongside cAdvisor — this is the recommended way to run on the host.
+The included `docker-compose.yml` pulls the prebuilt API image and runs it alongside cAdvisor — this is the recommended way to run on the host.
 
 ```bash
 cp .env.example .env
 # fill in .env with your Supabase project values and this node's NODE_ID
-docker compose up -d --build
+docker compose up -d
 ```
+
+In a checkout, `docker-compose.override.yml` sits next to `docker-compose.yml`
+and adds `build: .` back to the `api` service, so `docker compose up -d --build`
+still builds from local source for development. Compose merges that file
+automatically and only ever finds it in a checkout — nodes receive just
+`docker-compose.yml`, so they always run the prebuilt image.
 
 This starts:
 
-- **`api`** — the REST API, built from the included `Dockerfile`, with the host's Docker socket mounted (so it can manage sibling OBS containers) and GPU access passed through (`gpus: all`) for `nvidia-smi`. It joins both the internal-only `internal` network (to reach cAdvisor) and `obs-net` (to reach the instance containers it creates).
+- **`api`** — the REST API, from `ghcr.io/streamwizard/obs-instance-manager` (built from the included `Dockerfile`), with the host's Docker socket mounted (so it can manage sibling OBS containers) and GPU access passed through (`gpus: all`) for `nvidia-smi`. It joins both the internal-only `internal` network (to reach cAdvisor) and `obs-net` (to reach the instance containers it creates).
 - **`cadvisor`** — used for per-container CPU/RAM metrics. It sits on an internal-only `internal` Docker network shared with `api` and has no port published to the host — only the `api` container can reach it, at `http://cadvisor:8080` (already wired up via the `CADVISOR_URL` env var in the compose file).
 
 Requirements on the host: Docker with the NVIDIA Container Toolkit installed (so `gpus: all` and `nvidia-smi` work inside the `api` container), `nvidia-smi`-capable drivers installed on the host itself, and the `obs-net` Docker network created (`docker network create obs-net` — `scripts/install.sh` does this for you).
@@ -133,9 +164,10 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 |---|---|
 | `NODE_ID` | The `obs_nodes.id` row this process represents. Required — every instance-manager process serves exactly one node. |
 | `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key, used by the backend to bypass RLS for all writes |
-| `SUPABASE_JWT_SECRET` | Used to verify user JWTs in the auth middleware |
+| `NODE_API_KEY` | This node's key for authenticating to `streamwizard-api` (issued by the panel at claim time) |
+| `REST_API_URL` | Base URL of the panel's `streamwizard-api` |
 | `PORT` | Port the API listens on (default `3000`) |
+| `OBS_IMAGE_TAG` | Read by `docker-compose.yml`, not the app. Blank tracks `:latest`; set to `sha-<short>` to pin the node to a specific build |
 | `CADVISOR_URL` | Base URL of the cAdvisor instance used for container CPU/RAM metrics (default `http://localhost:8080`) |
 | `OBS_NETWORK` | Docker network shared with instance containers for the websocket proxy (default `obs-net`) |
 | `PANEL_ORIGIN` | Comma-separated origin(s) allowed to call the REST API directly from a browser (CORS). Default `*` |

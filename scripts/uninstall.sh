@@ -45,12 +45,12 @@
 #
 #
 # obs-instance-manager node uninstaller. Reverses what scripts/install.sh
-# did, using the same defaults (service user, repo dir, network name) so it
+# did, using the same defaults (service user, config dir, network name) so it
 # undoes exactly what was set up.
 #
 # By default this only removes things install.sh itself created: the OBS
-# containers/images/network, /data/obs-configs, the repo checkout, and the
-# `obs` service account. It deliberately leaves Docker, the NVIDIA Container
+# containers/images/network, /data/obs-configs, the config directory
+# (docker-compose.yml/.env), and the `obs` service account. It deliberately leaves Docker, the NVIDIA Container
 # Toolkit, ufw, and the host's nvidia driver installed, since other things
 # on the box may depend on them. Pass the --purge-* / --disable-ufw flags
 # below to also tear those down (e.g. to reset a test VM to a clean slate).
@@ -116,7 +116,7 @@ done
 log "This will remove:"
 log "  - the obs-instance-manager docker compose stack, its containers/images, and the '$NETWORK_NAME' network"
 [ "$KEEP_DATA" = "true" ] || log "  - /data/obs-configs (per-instance OBS configs/settings)"
-log "  - $REPO_DIR"
+log "  - $REPO_DIR (docker-compose.yml, .env, and this uninstaller)"
 [ "$KEEP_USER" = "true" ] || log "  - the '$SERVICE_USER' service account and its home directory"
 [ "$REMOVE_UFW_RULE" = "true" ] && log "  - the ufw allow rule for port $API_PORT"
 [ "$DISABLE_UFW" = "true" ] && log "  - ALL ufw rules (full reset + disable, not just the ones above)"

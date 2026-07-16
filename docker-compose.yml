@@ -1,6 +1,10 @@
 services:
+  # Prebuilt by .github/workflows/build-images.yml on every merge to main; nodes
+  # pull it rather than building from source (see scripts/install.sh). Blank
+  # OBS_IMAGE_TAG tracks :latest -- set it to sha-<short> in .env to pin a node
+  # to a specific build without editing this file.
   api:
-    build: .
+    image: ghcr.io/streamwizard/obs-instance-manager:${OBS_IMAGE_TAG:-latest}
     container_name: obs-panel-api
     restart: unless-stopped
     ports:

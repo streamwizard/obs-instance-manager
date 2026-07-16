@@ -1,0 +1,8 @@
+# Local dev only: builds the api image from this checkout instead of pulling the
+# prebuilt one from GHCR. Compose merges this file automatically when it sits
+# next to docker-compose.yml, which only ever happens in a repo checkout --
+# scripts/install.sh fetches just docker-compose.yml onto a node, so a node can
+# never fall back to building from source that isn't there.
+services:
+  api:
+    build: .
