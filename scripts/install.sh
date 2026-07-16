@@ -281,6 +281,15 @@ with open(env_path, "w") as f:
     f.write("PLUGINS_PATH=/data/obs-plugins\n")
     f.write("PANEL_ORIGIN=*\n")
     f.write("DEBUG=\n")
+    # rest-api only includes these when it has InfluxDB configured for this
+    # environment, so fall back to blank rather than KeyError-ing a node that
+    # was claimed before Influx was wired up. src/clients/influx.ts needs all
+    # four non-empty and disables metrics otherwise, so blanks are the correct
+    # "no metrics sink" signal.
+    f.write(f"INFLUXDB_URL={data.get('INFLUXDB_URL') or ''}\n")
+    f.write(f"INFLUXDB_TOKEN={data.get('INFLUXDB_TOKEN') or ''}\n")
+    f.write(f"INFLUXDB_ORG={data.get('INFLUXDB_ORG') or ''}\n")
+    f.write(f"INFLUXDB_BUCKET={data.get('INFLUXDB_BUCKET') or ''}\n")
     # Blank by default -- docker-compose.yml falls back to :latest. Set this to
     # pin the node to a specific build (e.g. sha-abc1234) without editing
     # docker-compose.yml.
