@@ -2,6 +2,7 @@ import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
 import { PLUGINS_LOCAL_DIR } from "../services/plugins";
 import { getInstanceByIdAdmin, listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
+import { trackInstanceEvent } from "../services/influx-metrics";
 import { StreamwizardApi } from "./streamwizard-api";
 import type { Instance, InstanceStatus } from "../types";
 
@@ -285,23 +286,27 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
           await _restartInstance(instance);
           log("info", "instance auto-resumed after reconcile", { instanceId: instance.id });
           instanceResults.push({ instance_id: instance.id, action: "restarted" });
+          trackInstanceEvent(nodeId, instance.id, instance.user_id, "auto_restarted", { reason: "reconcile" });
         } catch (e) {
           log("error", "instance auto-resume failed, marked error", {
             instanceId: instance.id,
             error: (e as Error).message,
           });
           instanceResults.push({ instance_id: instance.id, action: "restart_failed" });
+          trackInstanceEvent(nodeId, instance.id, instance.user_id, "restart_failed", { reason: "reconcile" });
         }
         await new Promise((resolve) => setTimeout(resolve, RESTART_STAGGER_MS));
       } else {
         await updateInstance(instance.id, { status: "error" });
         log("warn", "instance container missing, marked error (no restart handler registered)", { instanceId: instance.id });
         instanceResults.push({ instance_id: instance.id, action: "marked_error" });
+        trackInstanceEvent(nodeId, instance.id, instance.user_id, "crash", { reason: "reconcile" });
       }
     } else if (status === "not_found" && instance.status !== "error") {
       await updateInstance(instance.id, { status: "error" });
       log("warn", "instance container missing, marked error", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_error" });
+      trackInstanceEvent(nodeId, instance.id, instance.user_id, "crash", { reason: "reconcile" });
     } else if (status === "running" && instance.status !== "running") {
       await updateInstance(instance.id, { status: "running" });
       log("info", "instance container running, resynced status", { instanceId: instance.id });
@@ -446,11 +451,17 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
   // connection rather than something wrong with the instance itself -- queue
   // it for auto-resume once gpu-xserver is confirmed back (see
   // handleGpuXserverEvent).
-  if (
+  const gpuCorrelated =
     status === "error" &&
     gpuXserverDownSince !== null &&
-    Date.now() - gpuXserverDownSince <= GPU_XSERVER_DIE_CORRELATION_WINDOW_MS
-  ) {
+    Date.now() - gpuXserverDownSince <= GPU_XSERVER_DIE_CORRELATION_WINDOW_MS;
+
+  trackInstanceEvent(updated.node_id, updated.id, updated.user_id, status === "error" ? "crash" : "stopped", {
+    exitCode,
+    reason: gpuCorrelated ? "gpu_xserver_outage" : undefined,
+  });
+
+  if (gpuCorrelated) {
     pendingGpuRecovery.set(updated.id, updated.node_id);
     log("info", "instance crash attributed to gpu-xserver outage, queued for auto-resume", {
       instanceId: updated.id,
@@ -531,10 +542,16 @@ async function recoverInstancesAfterGpuXserverRestart(): Promise<void> {
     try {
       await _restartInstance(instance);
       log("info", "instance auto-resumed after gpu-xserver recovery", { instanceId });
+      trackInstanceEvent(instance.node_id, instanceId, instance.user_id, "auto_restarted", {
+        reason: "gpu_xserver_recovery",
+      });
     } catch (e) {
       log("error", "instance auto-resume after gpu-xserver recovery failed", {
         instanceId,
         error: (e as Error).message,
+      });
+      trackInstanceEvent(instance.node_id, instanceId, instance.user_id, "restart_failed", {
+        reason: "gpu_xserver_recovery",
       });
     }
     await new Promise((resolve) => setTimeout(resolve, RESTART_STAGGER_MS));
