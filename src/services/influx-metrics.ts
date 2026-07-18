@@ -45,6 +45,33 @@ export function trackNodeMetrics(node: Node, host: HostMetrics, runningInstanceC
   pushPoint(point);
 }
 
+/** Lifecycle events the watchdog acts on. "crash" = died with a non-clean
+ * exit code (or found dead at reconcile); "stopped" = clean exit outside the
+ * /stop route; the restart events record what the auto-heal did about it. */
+export type InstanceLifecycleEvent = "crash" | "stopped" | "auto_restarted" | "restart_failed";
+
+// The watchdog in clients/docker.ts recovers from these events silently —
+// this point is what makes them observable: the alert engine reads the
+// obs_instance_event measurement for crash / crash-loop / failed-restart
+// rules, so every handler that reacts to a container death must write one.
+export function trackInstanceEvent(
+  nodeId: string,
+  instanceId: string,
+  userId: string | undefined,
+  event: InstanceLifecycleEvent,
+  meta?: { exitCode?: number; reason?: string }
+): void {
+  const point = new Point("obs_instance_event")
+    .tag("node_id", nodeId)
+    .tag("instance_id", instanceId)
+    .tag("event", event)
+    .intField("count", 1);
+  if (userId) point.tag("user_id", userId);
+  if (meta?.exitCode !== undefined) point.intField("exit_code", meta.exitCode);
+  if (meta?.reason) point.tag("reason", meta.reason);
+  pushPoint(point);
+}
+
 export function trackInstanceMetrics(nodeId: string, instance: Instance, metrics: ContainerMetrics): void {
   const point = new Point("obs_instance")
     .tag("node_id", nodeId)
