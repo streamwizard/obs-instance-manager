@@ -4,6 +4,7 @@ import { PLUGINS_LOCAL_DIR } from "../services/plugins";
 import { getInstanceByIdAdmin, listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
 import { trackInstanceEvent } from "../services/influx-metrics";
 import { StreamwizardApi } from "./streamwizard-api";
+import { broadcastLifecycle } from "./ws-server";
 import type { Instance, InstanceStatus } from "../types";
 
 // Imported lazily to avoid a circular dependency (obs-config imports s3, s3
@@ -37,6 +38,18 @@ const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 // Container IDs currently being stopped via the API routes. The die event
 // handler skips its own push+cleanup for these since the API route handles it.
 const apiStoppingContainers = new Set<string>();
+
+// Routes call these around their own stopContainer()+push+cleanup sequence
+// (instances.ts/admin.ts stop and delete handlers) so the live "die" event
+// handler below knows to stay out of the way instead of racing the same
+// config push / local-dir removal / DB write for the same container.
+export function markApiStopping(containerId: string): void {
+  apiStoppingContainers.add(containerId);
+}
+
+export function clearApiStopping(containerId: string): void {
+  apiStoppingContainers.delete(containerId);
+}
 
 const IMAGE = "ghcr.io/streamwizard/obs-cloud-container:latest";
 
@@ -304,15 +317,18 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
       }
     } else if (status === "not_found" && instance.status !== "error") {
       await updateInstance(instance.id, { status: "error" });
+      broadcastLifecycle(instance.user_id, instance.id, "error");
       log("warn", "instance container missing, marked error", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_error" });
       trackInstanceEvent(nodeId, instance.id, instance.user_id, "crash", { reason: "reconcile" });
     } else if (status === "running" && instance.status !== "running") {
       await updateInstance(instance.id, { status: "running" });
+      broadcastLifecycle(instance.user_id, instance.id, "started");
       log("info", "instance container running, resynced status", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_running" });
     } else if (status === "stopped" && instance.status === "running") {
       await updateInstance(instance.id, { status: "stopped" });
+      broadcastLifecycle(instance.user_id, instance.id, "stopped");
       log("info", "instance container stopped, resynced status", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_stopped" });
     } else {
@@ -432,12 +448,22 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
   const containerId: string | undefined = event.Actor?.ID;
   if (!containerId) return;
 
+  if (apiStoppingContainers.has(containerId)) {
+    debug("docker", `skipping die-event handling for ${containerId}, an API route is already stopping it`);
+    return;
+  }
+
   const exitCode = Number(event.Actor?.Attributes?.exitCode ?? -1);
   // 0 = clean exit, 143 = SIGTERM (docker stop), both are normal stops.
   const status: InstanceStatus = exitCode === 0 || exitCode === 143 ? "stopped" : "error";
 
   const updated = await updateInstanceByContainerId(containerId, { status, container_id: null });
   if (!updated) return;
+
+  // Out-of-band exit (crash, OOM, manual `docker stop`) -- API-initiated stops
+  // are filtered out above via apiStoppingContainers, so this only fires for
+  // deaths the routes never see. updated is the only place user_id is in scope.
+  broadcastLifecycle(updated.user_id, updated.id, status === "error" ? "error" : "stopped");
 
   log("info", "instance container exited, synced status", {
     instanceId: updated.id,

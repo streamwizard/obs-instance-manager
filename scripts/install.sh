@@ -290,6 +290,11 @@ with open(env_path, "w") as f:
     f.write(f"INFLUXDB_TOKEN={data.get('INFLUXDB_TOKEN') or ''}\n")
     f.write(f"INFLUXDB_ORG={data.get('INFLUXDB_ORG') or ''}\n")
     f.write(f"INFLUXDB_BUCKET={data.get('INFLUXDB_BUCKET') or ''}\n")
+    # rest-api only includes these when both are configured -- fall back to
+    # blank so the node still installs, it just won't push lifecycle events to
+    # browsers (src/clients/ws-server.ts skips the broadcast when unset).
+    f.write(f"WS_SERVER_URL={data.get('WS_SERVER_URL') or ''}\n")
+    f.write(f"CONSUMER_SECRET={data.get('CONSUMER_SECRET') or ''}\n")
     # Blank by default -- docker-compose.yml falls back to :latest. Set this to
     # pin the node to a specific build (e.g. sha-abc1234) without editing
     # docker-compose.yml.
