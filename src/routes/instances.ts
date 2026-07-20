@@ -9,20 +9,23 @@ import {
   getSubscriptionLimits,
   insertInstance,
   listUserInstances,
-  sumAllocatedVram,
   updateInstance,
 } from "../clients/supabase";
 import {
   createContainer,
+  clearApiStopping,
   getContainerStatus,
   instanceTarget,
+  markApiStopping,
   NOVNC_PORT_INTERNAL,
   OBS_WS_PORT_INTERNAL,
   removeContainer,
   startContainer,
   stopContainer,
 } from "../clients/docker";
+import { broadcastLifecycle } from "../clients/ws-server";
 import { NODE_ID } from "../utils/node";
+import { withInstanceLock } from "../utils/instance-lock";
 import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
@@ -281,14 +284,12 @@ instances.post("/", async (c) => {
     return c.json({ error: "Node has reached max_encoder_sessions capacity" }, 409);
   }
 
-  const currentVram = await sumAllocatedVram(node.id);
-  if (currentVram + planLimits.vram_mb > node.total_vram_mb) {
-    return c.json(
-      { error: "Allocating this instance would exceed total_vram_mb" },
-      409,
-    );
-  }
-
+  // No VRAM ledger check here: plan vram_mb allocations are far more
+  // conservative than real usage (~4 GB booked vs ~300 MB measured per
+  // streaming instance), so enforcing the sum against total_vram_mb starved
+  // nodes long before actual VRAM pressure. vram_allocated_mb is still
+  // recorded on the row for display; max_instances and max_encoder_sessions
+  // remain the capacity guards.
   const instanceId = crypto.randomUUID();
   const containerName = `obs-instance-${instanceId}`;
 
@@ -359,9 +360,11 @@ instances.post("/", async (c) => {
       status: "running",
     });
 
+    broadcastLifecycle(userId, instanceId, "started");
     return c.json(updated, 201);
   } catch (err) {
     await updateInstance(instanceId, { status: "error" });
+    broadcastLifecycle(userId, instanceId, "error");
     if (containerId) {
       await removeContainer(containerId).catch((e) =>
         debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`),
@@ -396,31 +399,41 @@ instances.post("/:id/stop", async (c) => {
   if (!instance.container_id)
     return c.json({ error: "Instance has no container" }, 400);
 
-  await stopContainer(instance.container_id);
+  const updated = await withInstanceLock(id, async () => {
+    const containerId = instance.container_id as string;
+    markApiStopping(containerId);
+    try {
+      await stopContainer(containerId);
 
-  await clearStreamKey(instance.id).catch((e) =>
-    log("warn", "failed to clear stream key before push", { instanceId: instance.id, error: (e as Error).message })
-  );
+      await clearStreamKey(instance.id).catch((e) =>
+        log("warn", "failed to clear stream key before push", { instanceId: instance.id, error: (e as Error).message })
+      );
 
-  await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-    log("warn", "obs config push failed after stop", {
-      instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
+      await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+        log("warn", "obs config push failed after stop", {
+          instanceId: instance.id,
+          error: (e as Error).message,
+        })
+      );
 
-  await removeLocalConfig(instance.id).catch((e) =>
-    log("warn", "failed to remove local config dir after stop", {
-      instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
+      await removeLocalConfig(instance.id).catch((e) =>
+        log("warn", "failed to remove local config dir after stop", {
+          instanceId: instance.id,
+          error: (e as Error).message,
+        })
+      );
 
-  await removeContainer(instance.container_id).catch((e) =>
-    debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-  );
+      await removeContainer(containerId).catch((e) =>
+        debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+      );
 
-  const updated = await updateInstance(id, { container_id: null, status: "stopped" });
+      const result = await updateInstance(id, { container_id: null, status: "stopped" });
+      broadcastLifecycle(instance.user_id, id, "stopped");
+      return result;
+    } finally {
+      clearApiStopping(containerId);
+    }
+  });
 
   return c.json(updated);
 });
@@ -432,39 +445,48 @@ instances.delete("/:id", async (c) => {
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-  if (instance.container_id) {
-    await stopContainer(instance.container_id).catch((e) =>
-      debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
+  await withInstanceLock(id, async () => {
+    if (instance.container_id) {
+      const containerId = instance.container_id;
+      markApiStopping(containerId);
+      try {
+        await stopContainer(containerId).catch((e) =>
+          debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
+        );
+
+        await clearStreamKey(instance.id).catch((e) =>
+          log("warn", "failed to clear stream key before delete push", { instanceId: instance.id, error: (e as Error).message })
+        );
+
+        await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+          log("warn", "obs config push failed before delete", {
+            instanceId: instance.id,
+            error: (e as Error).message,
+          })
+        );
+
+        await removeLocalConfig(instance.id).catch((e) =>
+          log("warn", "failed to remove local config dir before delete", {
+            instanceId: instance.id,
+            error: (e as Error).message,
+          })
+        );
+
+        await removeContainer(containerId).catch((e) =>
+          debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+        );
+      } finally {
+        clearApiStopping(containerId);
+      }
+    }
+
+    await removeS3Config(instance.user_id, instance.id).catch((e) =>
+      log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
     );
 
-    await clearStreamKey(instance.id).catch((e) =>
-      log("warn", "failed to clear stream key before delete push", { instanceId: instance.id, error: (e as Error).message })
-    );
-
-    await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-      log("warn", "obs config push failed before delete", {
-        instanceId: instance.id,
-        error: (e as Error).message,
-      })
-    );
-
-    await removeLocalConfig(instance.id).catch((e) =>
-      log("warn", "failed to remove local config dir before delete", {
-        instanceId: instance.id,
-        error: (e as Error).message,
-      })
-    );
-
-    await removeContainer(instance.container_id).catch((e) =>
-      debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-    );
-  }
-
-  await removeS3Config(instance.user_id, instance.id).catch((e) =>
-    log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
-  );
-
-  await deleteInstance(id);
+    await deleteInstance(id);
+    broadcastLifecycle(instance.user_id, id, "deleted");
+  });
 
   return c.json({ success: true });
 });

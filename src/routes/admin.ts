@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
 import { deleteInstance, getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
 import { getAllMetrics } from "../services/metrics";
-import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
+import { clearApiStopping, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
+import { broadcastLifecycle } from "../clients/ws-server";
 import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
+import { withInstanceLock } from "../utils/instance-lock";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
@@ -206,27 +208,37 @@ admin.post("/instances/:id/stop", async (c) => {
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (!instance.container_id) return c.json({ error: "Instance has no container" }, 400);
 
-  await stopContainer(instance.container_id);
+  const updated = await withInstanceLock(id, async () => {
+    const containerId = instance.container_id as string;
+    markApiStopping(containerId);
+    try {
+      await stopContainer(containerId);
 
-  await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-    log("warn", "obs config push failed after stop", {
-      instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
+      await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+        log("warn", "obs config push failed after stop", {
+          instanceId: instance.id,
+          error: (e as Error).message,
+        })
+      );
 
-  await removeLocalConfig(instance.id).catch((e) =>
-    log("warn", "failed to remove local config dir after stop", {
-      instanceId: instance.id,
-      error: (e as Error).message,
-    })
-  );
+      await removeLocalConfig(instance.id).catch((e) =>
+        log("warn", "failed to remove local config dir after stop", {
+          instanceId: instance.id,
+          error: (e as Error).message,
+        })
+      );
 
-  await removeContainer(instance.container_id).catch((e) =>
-    debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-  );
+      await removeContainer(containerId).catch((e) =>
+        debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+      );
 
-  const updated = await updateInstance(id, { container_id: null, status: "stopped" });
+      const result = await updateInstance(id, { container_id: null, status: "stopped" });
+      broadcastLifecycle(instance.user_id, id, "stopped");
+      return result;
+    } finally {
+      clearApiStopping(containerId);
+    }
+  });
 
   return c.json(updated);
 });
@@ -237,35 +249,44 @@ admin.delete("/instances/:id", async (c) => {
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-  if (instance.container_id) {
-    await stopContainer(instance.container_id).catch((e) =>
-      debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
+  await withInstanceLock(id, async () => {
+    if (instance.container_id) {
+      const containerId = instance.container_id;
+      markApiStopping(containerId);
+      try {
+        await stopContainer(containerId).catch((e) =>
+          debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
+        );
+
+        await pushObsConfig(instance.user_id, instance.id).catch((e) =>
+          log("warn", "obs config push failed before delete", {
+            instanceId: instance.id,
+            error: (e as Error).message,
+          })
+        );
+
+        await removeLocalConfig(instance.id).catch((e) =>
+          log("warn", "failed to remove local config dir before delete", {
+            instanceId: instance.id,
+            error: (e as Error).message,
+          })
+        );
+
+        await removeContainer(containerId).catch((e) =>
+          debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
+        );
+      } finally {
+        clearApiStopping(containerId);
+      }
+    }
+
+    await removeS3Config(instance.user_id, instance.id).catch((e) =>
+      log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
     );
 
-    await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-      log("warn", "obs config push failed before delete", {
-        instanceId: instance.id,
-        error: (e as Error).message,
-      })
-    );
-
-    await removeLocalConfig(instance.id).catch((e) =>
-      log("warn", "failed to remove local config dir before delete", {
-        instanceId: instance.id,
-        error: (e as Error).message,
-      })
-    );
-
-    await removeContainer(instance.container_id).catch((e) =>
-      debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-    );
-  }
-
-  await removeS3Config(instance.user_id, instance.id).catch((e) =>
-    log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
-  );
-
-  await deleteInstance(id);
+    await deleteInstance(id);
+    broadcastLifecycle(instance.user_id, id, "deleted");
+  });
 
   return c.json({ success: true });
 });

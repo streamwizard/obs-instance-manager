@@ -6,8 +6,10 @@
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
 import { createContainer, removeContainer, startContainer } from "../clients/docker";
 import { updateInstance } from "../clients/supabase";
+import { broadcastLifecycle } from "../clients/ws-server";
 import { decryptPassword, encryptPassword, generateVncPassword } from "../utils/crypto";
 import { debug, log } from "../utils/logger";
+import { withInstanceLock } from "../utils/instance-lock";
 import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "./obs-config";
 import { syncPlugins } from "./plugins";
 import { getStreamKey } from "./twitch";
@@ -42,7 +44,17 @@ export async function resolveVncPassword(instance: Instance): Promise<string> {
 // resolves its secrets, creates and starts the Docker container, and syncs
 // status back to the DB. On failure, marks the instance "error" and cleans
 // up any orphaned container -- mirrors the try/catch shape both routes had.
+//
+// Locked per-instance (see withInstanceLock) so this never overlaps with
+// another restartInstance call, nor with a concurrent stop/delete, for the
+// same instance -- every caller (the start routes, reconcileContainers'
+// auto-restart, and gpu-xserver recovery) funnels through here, so guarding
+// here covers all of them without each call site needing its own lock.
 export async function restartInstance(instance: Instance): Promise<Instance> {
+  return withInstanceLock(instance.id, () => doRestartInstance(instance));
+}
+
+async function doRestartInstance(instance: Instance): Promise<Instance> {
   await Promise.all([
     pullObsConfig(instance.user_id, instance.id).catch((e) =>
       log("warn", "obs config pull failed, starting with empty config", {
@@ -87,9 +99,14 @@ export async function restartInstance(instance: Instance): Promise<Instance> {
       shm_size: instance.shm_size,
     });
     await startContainer(containerId);
-    return await updateInstance(instance.id, { container_id: containerId, status: "running" });
+    const updated = await updateInstance(instance.id, { container_id: containerId, status: "running" });
+    // Covers every start path funnelling through here: user start, admin start,
+    // reconcile auto-resume, and gpu-xserver recovery.
+    broadcastLifecycle(instance.user_id, instance.id, "started");
+    return updated;
   } catch (err) {
     await updateInstance(instance.id, { status: "error" });
+    broadcastLifecycle(instance.user_id, instance.id, "error");
     if (containerId) {
       await removeContainer(containerId).catch((e) =>
         debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`)
