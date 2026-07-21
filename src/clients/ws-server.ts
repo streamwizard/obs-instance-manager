@@ -1,11 +1,14 @@
 import { debug, log } from "../utils/logger";
 
 // Lifecycle transitions we push to the owning user's browser clients via the
-// main ws-server's /internal/broadcast fan-out. "deleted" is an action, not a
-// DB status -- the row is removed on delete. Kept as a local literal (this repo
-// is standalone and doesn't import @repo/types); the string contract must stay
-// in sync with packages/types/src/overlay-ws.ts in the monorepo.
-export type LifecycleAction = "started" | "stopped" | "error" | "deleted";
+// main ws-server's /internal/broadcast fan-out. "starting"/"stopping" are
+// transitional (fired at the leading edge so other devices show an honest
+// "Starting…"/"Stopping…" instead of guessing at the socket drop); they map to
+// no DB status. "deleted" is an action, not a DB status -- the row is removed on
+// delete. Kept as a local literal (this repo is standalone and doesn't import
+// @repo/types); the string contract must stay in sync with
+// packages/types/src/overlay-ws.ts in the monorepo.
+export type LifecycleAction = "starting" | "started" | "stopping" | "stopped" | "error" | "deleted";
 
 const EVENT_TYPE = "streamwizard.obs_instance_lifecycle";
 const BROADCAST_TIMEOUT_MS = 3_000;

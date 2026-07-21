@@ -211,6 +211,8 @@ admin.post("/instances/:id/stop", async (c) => {
   const updated = await withInstanceLock(id, async () => {
     const containerId = instance.container_id as string;
     markApiStopping(containerId);
+    // Leading-edge signal: deliberate stop. Other devices show "Stopping…".
+    broadcastLifecycle(instance.user_id, id, "stopping");
     try {
       await stopContainer(containerId);
 

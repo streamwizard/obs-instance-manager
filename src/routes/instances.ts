@@ -321,6 +321,10 @@ instances.post("/", async (c) => {
     vnc_password_tag: encryptedVncPassword.tag,
   });
 
+  // Leading-edge signal for the fresh-launch flow (status "creating"): show
+  // "Starting…" on every device while the container is provisioned.
+  broadcastLifecycle(userId, instanceId, "starting");
+
   let containerId: string | null = null;
   try {
     await Promise.all([
@@ -402,6 +406,9 @@ instances.post("/:id/stop", async (c) => {
   const updated = await withInstanceLock(id, async () => {
     const containerId = instance.container_id as string;
     markApiStopping(containerId);
+    // Leading-edge signal: this stop is deliberate. Lets other devices show
+    // "Stopping…" instead of reading the imminent socket drop as a blip.
+    broadcastLifecycle(instance.user_id, id, "stopping");
     try {
       await stopContainer(containerId);
 
