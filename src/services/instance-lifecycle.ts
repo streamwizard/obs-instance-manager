@@ -55,6 +55,10 @@ export async function restartInstance(instance: Instance): Promise<Instance> {
 }
 
 async function doRestartInstance(instance: Instance): Promise<Instance> {
+  // Leading-edge signal: the box is coming up. Lets other devices show
+  // "Starting…" during the provisioning/boot wait instead of nothing.
+  broadcastLifecycle(instance.user_id, instance.id, "starting");
+
   await Promise.all([
     pullObsConfig(instance.user_id, instance.id).catch((e) =>
       log("warn", "obs config pull failed, starting with empty config", {
