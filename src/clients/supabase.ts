@@ -9,7 +9,6 @@ import {
   apiIsAdmin,
   apiListNodeInstances,
   apiListUserInstances,
-  apiSumAllocatedVram,
   apiUpdateInstance,
   apiUpdateInstanceByContainerId,
 } from "./streamwizard-api";
@@ -39,7 +38,9 @@ export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance
   return apiGetInstanceByIdAdmin(instanceId);
 }
 
-export async function insertInstance(instance: Omit<Instance, "created_at">): Promise<Instance> {
+export async function insertInstance(
+  instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+): Promise<Instance> {
   return apiInsertInstance(instance);
 }
 
@@ -53,10 +54,6 @@ export async function updateInstanceByContainerId(containerId: string, fields: P
 
 export async function deleteInstance(instanceId: string): Promise<void> {
   return apiDeleteInstance(instanceId);
-}
-
-export async function sumAllocatedVram(_nodeId: string): Promise<number> {
-  return apiSumAllocatedVram();
 }
 
 export async function countActiveInstances(_nodeId: string): Promise<number> {

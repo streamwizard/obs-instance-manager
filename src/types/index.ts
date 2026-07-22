@@ -40,6 +40,8 @@ export interface Instance {
   vnc_password_ciphertext: string | null;
   vnc_password_iv: string | null;
   vnc_password_tag: string | null;
+  storage_quota_mb: number;
+  used_storage_bytes: number;
   created_at: string;
 }
 

@@ -45,11 +45,6 @@ export async function apiListNodeInstances(): Promise<Instance[]> {
   return res.data;
 }
 
-export async function apiSumAllocatedVram(): Promise<number> {
-  const res = await StreamwizardApi.get<{ total_vram_mb: number }>("/api/nodes/instances/vram");
-  return res.data.total_vram_mb;
-}
-
 export async function apiCountActiveInstances(): Promise<number> {
   const res = await StreamwizardApi.get<{ count: number }>("/api/nodes/instances/active-count");
   return res.data.count;
@@ -77,7 +72,11 @@ export async function apiGetInstanceByIdAdmin(instanceId: string): Promise<Insta
   }
 }
 
-export async function apiInsertInstance(instance: Omit<Instance, "created_at">): Promise<Instance> {
+// storage_quota_mb / used_storage_bytes are DB-defaulted (see migration) and
+// never set by the node at create time, so they're omitted from the payload.
+export async function apiInsertInstance(
+  instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+): Promise<Instance> {
   const res = await StreamwizardApi.post<Instance>("/api/nodes/instances", instance);
   return res.data;
 }

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import admin, { notifyMetricsDrain } from "./routes/admin";
 import instances from "./routes/instances";
+import files from "./routes/files";
 import obs from "./routes/obs";
 import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
@@ -45,15 +46,23 @@ app.use(
       debug("cors", `rejecting origin ${requestOrigin}, allowed: ${allowedOrigins.join(", ")}`);
       return null;
     },
-    allowHeaders: ["Authorization", "Content-Type"],
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowHeaders: ["Authorization", "Content-Type", "X-File-Path"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   }),
 );
 
+// Media uploads (POST /instances/:id/files) legitimately exceed the 10MB cap
+// -- they stream large assets to disk and enforce their own per-file/quota
+// limits in services/media.ts. Every other route stays bounded.
+const MEDIA_UPLOAD_PATH = /^\/instances\/[^/]+\/files$/;
+
 app.use("*", async (c, next) => {
-  const contentLength = Number(c.req.header("content-length") ?? 0);
-  if (contentLength > MAX_REQUEST_BODY_BYTES) {
-    return c.json({ error: "Request body too large" }, 413);
+  const isMediaUpload = c.req.method === "POST" && MEDIA_UPLOAD_PATH.test(c.req.path);
+  if (!isMediaUpload) {
+    const contentLength = Number(c.req.header("content-length") ?? 0);
+    if (contentLength > MAX_REQUEST_BODY_BYTES) {
+      return c.json({ error: "Request body too large" }, 413);
+    }
   }
   await next();
 });
@@ -69,6 +78,7 @@ app.use("*", async (c, next) => {
 app.get("/health", (c) => c.json({ ok: true, timestamp: new Date().toISOString() }));
 
 app.route("/instances", instances);
+app.route("/instances", files);
 app.route("/metrics", metrics);
 app.route("/admin", admin);
 app.route("/obs", obs);

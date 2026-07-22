@@ -18,7 +18,10 @@ function localConfigDir(instanceId: string): string {
   return join(CONFIG_BASE, instanceId, "obs-studio");
 }
 
-function localMediaDir(instanceId: string): string {
+// Exported so the media file-manager service (services/media.ts) writes user
+// uploads into the exact same dir that gets bind-mounted to /home/app/media
+// and pushed to S3 by pushObsMedia -- keeping one source of truth for the path.
+export function localMediaDir(instanceId: string): string {
   return join(CONFIG_BASE, instanceId, "media");
 }
 
@@ -220,6 +223,16 @@ export async function pushObsMedia(userId: string, instanceId: string): Promise<
   );
 
   log("info", "obs media pushed to S3", { userId, instanceId, files: files.length });
+}
+
+// Deletes a single media object from S3 by its path relative to the media root.
+// pushObsMedia is additive (it only PUTs files that exist locally), so a local
+// delete/rename would otherwise leave the stale key in S3 and it'd reappear on
+// the next pullObsMedia. The media file-manager calls this to keep S3 in sync.
+export async function deleteObsMediaFile(userId: string, instanceId: string, relPath: string): Promise<void> {
+  const key = `${s3MediaPrefix(userId, instanceId)}${relPath}`;
+  await s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+  debug("s3", `deleted media object ${key}`);
 }
 
 export async function removeLocalConfig(instanceId: string): Promise<void> {
