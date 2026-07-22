@@ -72,11 +72,16 @@ files.get("/:id/files/download", async (c) => {
 
   try {
     const { abs, name, size } = await resolveDownload(loaded.instance.id, path);
+    // Defence in depth: names are already control-char-free (lexicalClean), but
+    // build the header safely anyway -- an ASCII-only quoted fallback plus an
+    // RFC 5987 filename* for the exact (percent-encoded) name. Never interpolate
+    // a raw filename into a header value.
+    const asciiName = name.replace(/[^A-Za-z0-9._-]/g, "_");
     return new Response(Bun.file(abs).stream(), {
       headers: {
         "Content-Type": "application/octet-stream",
         "Content-Length": String(size),
-        "Content-Disposition": `attachment; filename="${name.replace(/"/g, "")}"`,
+        "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
       },
     });
   } catch (err) {

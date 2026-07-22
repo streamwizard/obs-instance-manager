@@ -69,7 +69,10 @@ export interface MediaListing {
 // the temp+rename write path; fully closing it would need openat2(RESOLVE_-
 // BENEATH), which Bun does not expose.
 function lexicalClean(relPath: string): string {
-  if (!relPath || relPath.includes("\0")) {
+  // Reject control chars (incl. NUL, CR, LF) up front: they have no place in a
+  // filename and would otherwise ride through to headers (Content-Disposition)
+  // as a CRLF-injection vector, or confuse the filesystem.
+  if (!relPath || /[\x00-\x1f\x7f]/.test(relPath)) {
     throw new MediaError("Invalid file path", 400);
   }
   const cleaned = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
