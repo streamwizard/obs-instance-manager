@@ -42,6 +42,16 @@ function isPluginPath(rel: string): boolean {
   return rel.startsWith("plugins/");
 }
 
+// The OBS profile (basic/profiles/) holds resolution, fps and encoder/output
+// settings -- all plan-owned. Like plugins, it's sourced only from the plan
+// template folder on every start, never overlaid from the user's obs-configs and
+// never pushed back, so a user can't drift off their plan and a plan change takes
+// effect on next start. service.json lives here too (keyless in the template);
+// injectStreamKey writes the per-user key onto the on-disk file after the pull.
+function isProfilePath(rel: string): boolean {
+  return rel.startsWith("basic/profiles/");
+}
+
 async function listLocalFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
   try {
@@ -114,6 +124,11 @@ export async function pullObsConfig(userId: string, instanceId: string, template
   const localBase = localConfigDir(instanceId);
   await mkdir(localBase, { recursive: true });
 
+  // The profile is plan-owned and re-applied fresh from the template below. Wipe
+  // any stale local profile first so a crash-path leftover (where removeLocalConfig
+  // never ran) can't survive the download-on-top and shadow the plan's profile.
+  await rm(join(localBase, "basic", "profiles"), { recursive: true, force: true });
+
   // Always apply the template as a base layer (default config, scenes, etc.).
   // Plugin binaries are excluded here — they're shared across all instances via
   // syncPlugins()/PLUGINS_LOCAL_DIR and bind-mounted directly into the container,
@@ -133,7 +148,13 @@ export async function pullObsConfig(userId: string, instanceId: string, template
   // rather than re-downloading it only for the shared mount to hide it anyway.
   const prefix = s3Prefix(userId, instanceId);
   const allKeys = await listS3Objects(prefix);
-  const keys = allKeys.filter((key) => !isPluginPath(key.slice(prefix.length)));
+  // Exclude plugins/ (shared, mounted separately) AND basic/profiles/ (plan-owned,
+  // applied from the template above) so a user's saved profile never overrides the
+  // plan. Legacy overlays may still carry a profile from before this change; skip it.
+  const keys = allKeys.filter((key) => {
+    const rel = key.slice(prefix.length);
+    return !isPluginPath(rel) && !isProfilePath(rel);
+  });
   if (keys.length > 0) {
     await downloadPrefix(keys, prefix, localBase);
     log("info", "obs config pulled from S3", { userId, instanceId, template, templateFiles: templateKeys.length, instanceFiles: keys.length });
@@ -168,11 +189,13 @@ export async function pushObsConfig(userId: string, instanceId: string): Promise
   const localBase = localConfigDir(instanceId);
   const prefix = s3Prefix(userId, instanceId);
 
-  // Never push plugins/ back to the per-instance overlay — it's a shared,
-  // read-only bind mount, not instance-owned state (see isPluginPath).
-  const files = (await listLocalFiles(localBase)).filter(
-    (filePath) => !isPluginPath(relative(localBase, filePath))
-  );
+  // Never push plugins/ (shared, read-only mount) or basic/profiles/ (plan-owned,
+  // sourced from the template each start) back to the per-instance overlay — the
+  // overlay holds only user-owned state like scenes. See isPluginPath/isProfilePath.
+  const files = (await listLocalFiles(localBase)).filter((filePath) => {
+    const rel = relative(localBase, filePath);
+    return !isPluginPath(rel) && !isProfilePath(rel);
+  });
 
   if (files.length === 0) {
     debug("s3", `no local config to push for instance ${instanceId}`);

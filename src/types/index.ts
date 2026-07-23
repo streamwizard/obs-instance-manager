@@ -42,6 +42,10 @@ export interface Instance {
   vnc_password_tag: string | null;
   storage_quota_mb: number;
   used_storage_bytes: number;
+  // Names the plan-owned OBS template folder in S3 (obs-templates/<name>/) whose
+  // profile (resolution/fps/encoder) is pulled fresh on every start. Null on rows
+  // created before this column existed -- callers fall back to DEFAULT_TEMPLATE.
+  config_template: string | null;
   created_at: string;
 }
 
@@ -53,6 +57,9 @@ export interface CloudObsPlanLimits {
   cpu_quota: number;
   shm_size: string;
   vram_mb: number;
+  // Plan-owned OBS template folder under obs-templates/. Optional: plans seeded
+  // before this key exists fall back to DEFAULT_TEMPLATE.
+  config_template?: string;
 }
 
 export interface CreateInstanceBody {
