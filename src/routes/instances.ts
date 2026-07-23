@@ -312,6 +312,7 @@ instances.post("/", async (c) => {
     memory_mb: planLimits.memory_mb,
     cpu_quota: planLimits.cpu_quota,
     shm_size: planLimits.shm_size,
+    config_template: planLimits.config_template ?? null,
     subscription_id: subscriptionId,
     obs_ws_password_ciphertext: obsWsPasswordCiphertext,
     obs_ws_password_iv: obsWsPasswordIv,
@@ -328,7 +329,7 @@ instances.post("/", async (c) => {
   let containerId: string | null = null;
   try {
     await Promise.all([
-      pullObsConfig(userId, instanceId, template).catch((e) =>
+      pullObsConfig(userId, instanceId, planLimits.config_template ?? template).catch((e) =>
         log("warn", "obs config pull failed, starting with empty config", {
           instanceId,
           error: (e as Error).message,

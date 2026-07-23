@@ -60,7 +60,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
   broadcastLifecycle(instance.user_id, instance.id, "starting");
 
   await Promise.all([
-    pullObsConfig(instance.user_id, instance.id).catch((e) =>
+    pullObsConfig(instance.user_id, instance.id, instance.config_template ?? undefined).catch((e) =>
       log("warn", "obs config pull failed, starting with empty config", {
         instanceId: instance.id,
         error: (e as Error).message,
