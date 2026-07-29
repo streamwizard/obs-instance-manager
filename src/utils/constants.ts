@@ -17,3 +17,8 @@ export const OBS_MEDIA_QUOTA_MB_FALLBACK = Number(process.env.OBS_MEDIA_QUOTA_MB
 // any config changes since the last one of those. This periodic push bounds
 // that loss window for running instances.
 export const CONFIG_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
+
+// Backstop cadence for services/obs-event-listener.ts. The docker event stream
+// attaches/detaches scene listeners live; this bounds how long a missed event
+// (dropped stream, out-of-band status change) can leave an instance unwatched.
+export const OBS_EVENT_RESYNC_INTERVAL_MS = 60 * 1000;

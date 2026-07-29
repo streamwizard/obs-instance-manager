@@ -33,6 +33,19 @@ export function registerInstanceLifecycleHandlers(
   _restartInstance = restart;
 }
 
+// Same trick again: services/obs-event-listener.ts imports instanceTarget and
+// OBS_WS_PORT_INTERNAL from this module, so this module can't import back.
+let _attachObsEvents: ((instance: Instance) => void) | null = null;
+let _detachObsEvents: ((instanceId: string) => void) | null = null;
+
+export function registerObsEventHandlers(
+  attach: (instance: Instance) => void,
+  detach: (instanceId: string) => void
+): void {
+  _attachObsEvents = attach;
+  _detachObsEvents = detach;
+}
+
 const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 
 // Container IDs currently being stopped via the API routes. The die event
@@ -416,6 +429,9 @@ export function startEventListener(): void {
           handleContainerDieEvent(line).catch((e) =>
             debug("docker", `failed to handle container die event: ${e?.message ?? e}`)
           );
+          handleObsSceneWatchEvent(line).catch((e) =>
+            debug("docker", `failed to handle obs scene watch event: ${e?.message ?? e}`)
+          );
         }
       });
 
@@ -433,6 +449,37 @@ export function startEventListener(): void {
       });
     }
   );
+}
+
+// Attaches/detaches the scene listener (services/obs-event-listener.ts) as
+// instance containers come and go. Deliberately its own handler rather than a
+// branch inside handleContainerDieEvent: that one early-returns for containers
+// in apiStoppingContainers, so a detach placed there would leak a live socket
+// on every ordinary /stop and /delete. Detaching is safe whoever initiated it.
+async function handleObsSceneWatchEvent(rawLine: string): Promise<void> {
+  if (!_attachObsEvents || !_detachObsEvents) return;
+
+  const event = JSON.parse(rawLine);
+  if (event.Action !== "start" && event.Action !== "die") return;
+
+  const containerName: string = (event.Actor?.Attributes?.name ?? "").replace(/^\//, "");
+  if (!containerName.startsWith("obs-instance-")) return;
+
+  // Container names are `obs-instance-${instanceId}` (see routes/instances.ts),
+  // so a detach needs no DB round trip.
+  const instanceId = containerName.slice("obs-instance-".length);
+  if (!instanceId) return;
+
+  if (event.Action === "die") {
+    _detachObsEvents(instanceId);
+    return;
+  }
+
+  // "start" fires well before OBS is listening (entrypoint.sh waits on Xorg
+  // first); the listener's own backoff absorbs that.
+  const instance = await getInstanceByIdAdmin(instanceId);
+  if (!instance) return;
+  _attachObsEvents(instance);
 }
 
 async function handleContainerDieEvent(rawLine: string): Promise<void> {

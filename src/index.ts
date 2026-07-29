@@ -7,15 +7,16 @@ import obs from "./routes/obs";
 import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
 import { debug, log } from "./utils/logger";
-import { reconcileContainers, registerConfigHandlers, registerInstanceLifecycleHandlers, startEventListener } from "./clients/docker";
+import { reconcileContainers, registerConfigHandlers, registerInstanceLifecycleHandlers, registerObsEventHandlers, startEventListener } from "./clients/docker";
 import { listNodeInstances } from "./clients/supabase";
 import { pushObsConfig, removeLocalConfig } from "./services/obs-config";
 import { restartInstance } from "./services/instance-lifecycle";
 import { checkS3 } from "./clients/s3";
 import { NODE_ID } from "./utils/node";
-import { CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES } from "./utils/constants";
+import { CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES, OBS_EVENT_RESYNC_INTERVAL_MS } from "./utils/constants";
 import { startMetricsPersistence } from "./services/metrics-persist";
 import { loadCommandKeyHash, startCommandKeyRefresh } from "./services/command-key";
+import { attachInstance, detachAll, detachInstance, syncInstances } from "./services/obs-event-listener";
 import type { AppVariables } from "./types";
 
 const app = new Hono<{ Variables: AppVariables }>();
@@ -89,12 +90,29 @@ await checkS3();
 
 registerConfigHandlers(pushObsConfig, removeLocalConfig);
 registerInstanceLifecycleHandlers(restartInstance);
+registerObsEventHandlers(attachInstance, detachInstance);
 
 await reconcileContainers(NODE_ID).catch((err) =>
   log("error", "boot-time container reconciliation failed", { error: (err as Error).message }),
 );
 
 startEventListener();
+
+// Watch every already-running instance's OBS for scene changes, then keep that
+// set honest on an interval -- the docker event stream drives attach/detach
+// live, this is the backstop for anything it missed (dropped stream, a status
+// flipped by reconcile rather than an event).
+// Not awaited: the first pass staggers its attaches, and nothing downstream --
+// least of all binding the HTTP port -- needs to wait on it.
+void syncInstances().catch((err) =>
+  log("error", "boot-time OBS scene listener sync failed", { error: (err as Error).message }),
+);
+
+setInterval(() => {
+  syncInstances().catch((err) =>
+    log("error", "OBS scene listener resync failed", { error: (err as Error).message }),
+  );
+}, OBS_EVENT_RESYNC_INTERVAL_MS);
 
 startMetricsPersistence(NODE_ID);
 
@@ -149,6 +167,9 @@ const shutdown = async (signal: string) => {
   if (shuttingDown) return;
   shuttingDown = true;
   log("info", `received ${signal}, draining metrics clients then shutting down`);
+  // Close the OBS scene sockets deliberately rather than letting them be ripped
+  // down with the process, and stop their retry loops from firing mid-drain.
+  detachAll();
   notifyMetricsDrain("/admin/metrics/stream");
   await new Promise((resolve) => setTimeout(resolve, DRAIN_GRACE_MS));
   server.stop(true);
