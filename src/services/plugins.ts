@@ -1,32 +1,25 @@
 import { GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { s3, S3_BUCKET } from "../clients/s3";
-import { debug, log } from "../utils/logger";
+import { log } from "../utils/logger";
 
 const PLUGINS_PREFIX = "plugins/";
-const ETAG_CACHE_FILE = ".etags.json";
 
 // Shared between this module and docker.ts so both use the same local dir.
 export const PLUGINS_LOCAL_DIR = process.env.PLUGINS_PATH ?? "/data/obs-plugins";
 
-async function loadEtagCache(dir: string): Promise<Record<string, string>> {
-  try {
-    return JSON.parse(await readFile(join(dir, ETAG_CACHE_FILE), "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-// Guards against two concurrent create/start requests both listing+downloading
-// S3 on a cold node — callers that arrive while a sync is in flight just await
-// the same promise instead of racing a redundant sync.
+// Guards against two concurrent create/start requests both wiping+downloading
+// at once — callers that arrive while a sync is in flight just await the same
+// promise. Load-bearing for correctness: a second sync starting mid-download
+// would wipe files the first one just wrote.
 let inFlight: Promise<void> | null = null;
 
-// Syncs the plugins/ prefix from S3 to PLUGINS_LOCAL_DIR, skipping files
-// whose ETag matches the local cache (i.e. already up to date). Called
-// before every container create/start so nodes always run the latest plugins
-// without needing manual file placement or an API restart.
+// Mirrors the plugins/ prefix from S3 to PLUGINS_LOCAL_DIR: wipes the local
+// dir and re-downloads everything, so S3 is the single source of truth —
+// plugins added to or removed from the bucket take effect on the next
+// container create/start. If S3 is unreachable the listing throws before
+// anything is wiped, and callers fall back to the existing local plugins.
 export function syncPlugins(): Promise<void> {
   if (!inFlight) {
     inFlight = syncPluginsInternal().finally(() => {
@@ -39,7 +32,7 @@ export function syncPlugins(): Promise<void> {
 async function syncPluginsInternal(): Promise<void> {
   await mkdir(PLUGINS_LOCAL_DIR, { recursive: true });
 
-  let objects: { key: string; etag: string }[] = [];
+  let objects: string[] = [];
   let continuationToken: string | undefined;
   do {
     const res = await s3.send(
@@ -50,22 +43,27 @@ async function syncPluginsInternal(): Promise<void> {
       })
     );
     for (const obj of res.Contents ?? []) {
-      if (obj.Key && obj.ETag) objects.push({ key: obj.Key, etag: obj.ETag });
+      if (obj.Key) objects.push(obj.Key);
     }
     continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
   } while (continuationToken);
 
+  // Wipe the dir's contents (not the dir itself — running containers
+  // bind-mount this exact inode; replacing it would detach them).
+  for (const entry of await readdir(PLUGINS_LOCAL_DIR)) {
+    await rm(join(PLUGINS_LOCAL_DIR, entry), { recursive: true, force: true });
+  }
+
   if (objects.length === 0) {
-    debug("s3", "no plugins found in S3 under plugins/ prefix");
+    log("warn", "no plugins in S3 under plugins/ prefix — local plugins dir wiped empty");
     return;
   }
 
-  const etagCache = await loadEtagCache(PLUGINS_LOCAL_DIR);
   const baseResolved = resolve(PLUGINS_LOCAL_DIR) + sep;
   let downloaded = 0;
 
   await Promise.all(
-    objects.map(async ({ key, etag }) => {
+    objects.map(async (key) => {
       const rel = key.slice(PLUGINS_PREFIX.length);
       if (!rel || rel.includes("\0")) return;
       const localPath = resolve(PLUGINS_LOCAL_DIR, rel);
@@ -74,21 +72,13 @@ async function syncPluginsInternal(): Promise<void> {
         return;
       }
 
-      if (etagCache[key] === etag) {
-        debug("s3", `plugin up to date: ${rel}`);
-        return;
-      }
-
       await mkdir(localPath.substring(0, localPath.lastIndexOf("/")), { recursive: true });
       const res = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
       if (!res.Body) return;
       await Bun.write(localPath, await res.Body.transformToByteArray());
-      etagCache[key] = etag;
       downloaded++;
     })
   );
-
-  await writeFile(join(PLUGINS_LOCAL_DIR, ETAG_CACHE_FILE), JSON.stringify(etagCache, null, 2));
 
   log("info", "plugins synced from S3", { downloaded, total: objects.length });
 }
