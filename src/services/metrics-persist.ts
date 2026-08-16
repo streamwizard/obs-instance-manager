@@ -1,6 +1,7 @@
 import { getAllMetrics } from "./metrics";
 import { trackNodeMetrics, trackInstanceMetrics } from "./influx-metrics";
-import { getNode, listNodeInstances } from "../clients/supabase";
+import { getCachedNode } from "./node-cache";
+import { getCachedNodeInstances } from "./instance-cache";
 import { log } from "../utils/logger";
 
 // Independent persistence loop: decoupled from the live SSE/WS metrics push
@@ -15,7 +16,7 @@ export function startMetricsPersistence(nodeId: string, intervalMs = 10_000): vo
 }
 
 async function persistOnce(nodeId: string): Promise<void> {
-  const [node, nodeInstances] = await Promise.all([getNode(nodeId), listNodeInstances(nodeId)]);
+  const [node, nodeInstances] = await Promise.all([getCachedNode(), getCachedNodeInstances()]);
   const runningInstances = nodeInstances.filter((i) => i.status === "running" && i.container_id);
 
   const payload = await getAllMetrics(runningInstances);

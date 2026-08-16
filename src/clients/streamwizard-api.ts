@@ -9,8 +9,15 @@ if (!apiUrl || !nodeApiKey) {
   throw new Error("REST_API_URL and NODE_API_KEY must be set");
 }
 
+// Everything on this instance is small JSON — media uploads go straight to S3 —
+// so no request has a reason to run long. The timeout matters because callers
+// now share responses through node-cache's single-flight: without it one hung
+// socket would wedge every waiting consumer instead of just its own call.
+const REQUEST_TIMEOUT_MS = 15_000;
+
 export const StreamwizardApi = axios.create({
   baseURL: apiUrl,
+  timeout: REQUEST_TIMEOUT_MS,
   headers: {
     "Content-Type": "application/json",
     Authorization: `Bearer ${nodeApiKey}`,

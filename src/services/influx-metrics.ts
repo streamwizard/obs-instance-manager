@@ -21,8 +21,13 @@ export function trackNodeMetrics(node: Node, host: HostMetrics, runningInstanceC
     .floatField("rx_bytes_per_sec", host.rx_bytes_per_sec)
     .floatField("tx_bytes_per_sec", host.tx_bytes_per_sec)
     .intField("running_instance_count", runningInstanceCount)
-    .intField("max_instances", node.max_instances)
-    .intField("total_vram_mb", node.total_vram_mb);
+    // Capacity, not a measurement — but the alerting side reads it back out of
+    // Influx (obs.capacity_full compares it against running_instance_count) and
+    // the admin fleet view renders running/max from it, so it has to ride every
+    // point. node.total_vram_mb used to be written here too and was dropped:
+    // nothing ever read it, and the VRAM the dashboards actually chart is
+    // host.vram_total_mb above.
+    .intField("max_instances", node.max_instances);
 
   // null = pro card without a driver session cap — no capacity rule applies,
   // so the field is simply absent for those nodes.

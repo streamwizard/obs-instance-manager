@@ -8,7 +8,7 @@ import metrics from "./routes/metrics";
 import { websocket } from "./utils/ws";
 import { debug, log } from "./utils/logger";
 import { reconcileContainers, registerConfigHandlers, registerInstanceLifecycleHandlers, registerObsEventHandlers, startEventListener } from "./clients/docker";
-import { listNodeInstances } from "./clients/supabase";
+import { getCachedNodeInstances } from "./services/instance-cache";
 import { pushObsConfig, removeLocalConfig } from "./services/obs-config";
 import { restartInstance } from "./services/instance-lifecycle";
 import { checkS3 } from "./clients/s3";
@@ -117,7 +117,9 @@ setInterval(() => {
 startMetricsPersistence(NODE_ID);
 
 // Load this node's obs_command key hash so the /obs route can authenticate the
-// obs-auto-switcher, then keep it fresh so key rotations propagate live.
+// obs-auto-switcher. The retry loop only fires while no hash is held (failed
+// boot fetch); rotations propagate through verifyCommandKey's mismatch path,
+// not polling.
 await loadCommandKeyHash();
 startCommandKeyRefresh();
 
@@ -132,7 +134,7 @@ setInterval(() => {
 }, CONFIG_AUTOSAVE_INTERVAL_MS);
 
 async function autosaveRunningInstanceConfigs(): Promise<void> {
-  const nodeInstances = await listNodeInstances(NODE_ID);
+  const nodeInstances = await getCachedNodeInstances();
   const running = nodeInstances.filter((i) => i.status === "running" && i.container_id);
 
   await Promise.all(

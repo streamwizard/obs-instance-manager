@@ -1,7 +1,8 @@
 import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
 import { PLUGINS_LOCAL_DIR } from "../services/plugins";
-import { getInstanceByIdAdmin, listNodeInstances, updateInstance, updateInstanceByContainerId } from "./supabase";
+import { getInstanceByIdAdmin, updateInstance, updateInstanceByContainerId } from "./supabase";
+import { refreshNodeInstances } from "../services/instance-cache";
 import { trackInstanceEvent } from "../services/influx-metrics";
 import { StreamwizardApi } from "./streamwizard-api";
 import { broadcastLifecycle } from "./ws-server";
@@ -273,7 +274,9 @@ const RESTART_STAGGER_MS = 3000;
 // so a node reboot or manager crash doesn't strand every paying customer's
 // session until an operator notices.
 export async function reconcileContainers(nodeId: string): Promise<void> {
-  const nodeInstances = await listNodeInstances(nodeId);
+  // Live read (and boot-time cache warm-up): the process just started, so its
+  // memory is empty by definition — reconcile must see the database's truth.
+  const nodeInstances = await refreshNodeInstances();
   const knownContainerIds = new Set(
     nodeInstances.map((i) => i.container_id).filter((id): id is string => !!id)
   );
