@@ -117,7 +117,9 @@ setInterval(() => {
 startMetricsPersistence(NODE_ID);
 
 // Load this node's obs_command key hash so the /obs route can authenticate the
-// obs-auto-switcher, then keep it fresh so key rotations propagate live.
+// obs-auto-switcher. The retry loop only fires while no hash is held (failed
+// boot fetch); rotations propagate through verifyCommandKey's mismatch path,
+// not polling.
 await loadCommandKeyHash();
 startCommandKeyRefresh();
 

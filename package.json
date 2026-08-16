@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun --hot run src/index.ts",
     "start": "bun run src/index.ts",
-    "test": "bun test"
+    "test": "bash scripts/test.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",

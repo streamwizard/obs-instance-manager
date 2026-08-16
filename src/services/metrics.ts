@@ -1,7 +1,7 @@
 import { getContainerCpuRam } from "./cadvisor";
 import type { ContainerMetrics, HostMetrics, Instance, MetricsPayload } from "../types";
 import { docker } from "../clients/docker";
-import { getNode } from "../clients/supabase";
+import { getCachedNode } from "./node-cache";
 
 async function readProcStatCpuLine(): Promise<{ idle: number; total: number }> {
   const text = await Bun.file("/proc/stat").text();
@@ -238,20 +238,21 @@ function logContainerMetricsFailure(instanceId: string, err: unknown): void {
 export async function getAllMetrics(instances: Instance[]): Promise<MetricsPayload> {
   const runningInstances = instances.filter((i) => i.status === "running" && i.container_id);
 
-  const [host, computeApps] = await Promise.all([getHostMetrics(), queryNvidiaSmiComputeApps()]);
-
-  const nodeMemoryCache = new Map<string, number>();
-  async function getNodeMemoryMb(nodeId: string): Promise<number> {
-    const cached = nodeMemoryCache.get(nodeId);
-    if (cached !== undefined) return cached;
-    const node = await getNode(nodeId);
-    nodeMemoryCache.set(nodeId, node.memory_mb);
-    return node.memory_mb;
-  }
+  // node is only read for memory_mb, the denominator for container RAM %.
+  // It used to be fetched per-instance through a per-call Map that was thrown
+  // away every pass — which meant a second GET /api/nodes/me on top of the one
+  // the caller had just made, on every 10s persist tick and every 3s dashboard
+  // tick. All instances resolve to this node anyway (getNode ignores its
+  // argument), so one cached read covers the lot.
+  const [host, computeApps, node] = await Promise.all([
+    getHostMetrics(),
+    queryNvidiaSmiComputeApps(),
+    getCachedNode(),
+  ]);
+  const ramLimitMb = node.memory_mb;
 
   const containerMetricsList = await Promise.all(
     runningInstances.map(async (instance) => {
-      const ramLimitMb = await getNodeMemoryMb(instance.node_id);
       try {
         const metrics = await getContainerMetrics(
           instance.container_id as string,

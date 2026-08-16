@@ -5,12 +5,12 @@ import {
   countActiveInstances,
   deleteInstance,
   getInstanceById,
-  getNode,
   getSubscriptionLimits,
   insertInstance,
   listUserInstances,
   updateInstance,
 } from "../clients/supabase";
+import { refreshNode } from "../services/node-cache";
 import {
   createContainer,
   clearApiStopping,
@@ -261,8 +261,13 @@ instances.post("/", async (c) => {
     return c.json({ error: "obs_ws_password is required" }, 400);
   }
 
+  // refreshNode, not the cached read: max_instances/max_encoder_sessions gate
+  // authorization here rather than feeding telemetry, so an admin raising
+  // capacity to unblock someone must take effect on the very next create — not
+  // whenever the TTL happens to lapse. Creates are rare and rate-limited, so
+  // the live read costs nothing.
   const [node, planLimits] = await Promise.all([
-    getNode(NODE_ID),
+    refreshNode(),
     getSubscriptionLimits(subscriptionId),
   ]);
 
