@@ -1,9 +1,8 @@
 import OBSWebSocket, { EventSubscription } from "obs-websocket-js";
 import { instanceTarget, OBS_WS_PORT_INTERNAL } from "../clients/docker";
-import { listNodeInstances } from "../clients/supabase";
+import { refreshNodeInstances } from "./instance-cache";
 import { broadcastSceneChanged } from "../clients/ws-server";
 import { decryptPassword } from "../utils/crypto";
-import { NODE_ID } from "../utils/node";
 import { debug, log } from "../utils/logger";
 import type { Instance } from "../types";
 
@@ -134,8 +133,12 @@ export function detachAll(): void {
 // Correctness backstop for anything the docker event stream missed (dropped
 // stream, manager restart, a status flipped by reconcile rather than an event).
 // Idempotent -- safe to run on boot and on an interval.
+//
+// refreshNodeInstances, never getCachedNodeInstances: this loop exists to
+// catch changes this process did NOT make, so it must read live — and that
+// same read is what keeps the instance cache warm for everyone else.
 export async function syncInstances(): Promise<void> {
-  const nodeInstances = await listNodeInstances(NODE_ID);
+  const nodeInstances = await refreshNodeInstances();
   const shouldWatch = new Map(
     nodeInstances.filter((i) => i.status === "running" && i.container_id).map((i) => [i.id, i]),
   );

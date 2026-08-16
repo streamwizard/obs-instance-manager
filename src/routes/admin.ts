@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Hono, type Context, type Next } from "hono";
-import { deleteInstance, getInstanceByIdAdmin, isAdmin, listNodeInstances, updateInstance } from "../clients/supabase";
+import { deleteInstance, getInstanceByIdAdmin, isAdmin, updateInstance } from "../clients/supabase";
+import { getCachedNodeInstances } from "../services/instance-cache";
 import { getAllMetrics } from "../services/metrics";
 import { clearApiStopping, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
 import { broadcastLifecycle } from "../clients/ws-server";
-import { NODE_ID } from "../utils/node";
 import { authMiddleware } from "../middleware/auth";
 import { withInstanceLock } from "../utils/instance-lock";
 import { upgradeWebSocket } from "../utils/ws";
@@ -85,7 +85,10 @@ admin.get(
     };
 
     const sendMetrics = async (ws: MetricsSocket) => {
-      const nodeInstances = await listNodeInstances(NODE_ID);
+      // Cached: admin start/stop/delete invalidate it, so a state change this
+      // process made is visible on the next 3s tick — same as when this
+      // fetched live, minus the rest-api round trip per tick per socket.
+      const nodeInstances = await getCachedNodeInstances();
       const payload = await getAllMetrics(nodeInstances);
       send(ws, { type: "notification", payload });
       debug("ws", `metrics/stream sent payload for ${nodeInstances.length} instance(s)`);
