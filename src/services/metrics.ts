@@ -1,7 +1,6 @@
 import { getContainerCpuRam } from "./cadvisor";
 import type { ContainerMetrics, HostMetrics, Instance, MetricsPayload } from "../types";
 import { docker } from "../clients/docker";
-import { getCachedNode } from "./node-cache";
 
 async function readProcStatCpuLine(): Promise<{ idle: number; total: number }> {
   const text = await Bun.file("/proc/stat").text();
@@ -238,21 +237,17 @@ function logContainerMetricsFailure(instanceId: string, err: unknown): void {
 export async function getAllMetrics(instances: Instance[]): Promise<MetricsPayload> {
   const runningInstances = instances.filter((i) => i.status === "running" && i.container_id);
 
-  // node is only read for memory_mb, the denominator for container RAM %.
-  // It used to be fetched per-instance through a per-call Map that was thrown
-  // away every pass — which meant a second GET /api/nodes/me on top of the one
-  // the caller had just made, on every 10s persist tick and every 3s dashboard
-  // tick. All instances resolve to this node anyway (getNode ignores its
-  // argument), so one cached read covers the lot.
-  const [host, computeApps, node] = await Promise.all([
-    getHostMetrics(),
-    queryNvidiaSmiComputeApps(),
-    getCachedNode(),
-  ]);
-  const ramLimitMb = node.memory_mb;
+  const [host, computeApps] = await Promise.all([getHostMetrics(), queryNvidiaSmiComputeApps()]);
 
   const containerMetricsList = await Promise.all(
     runningInstances.map(async (instance) => {
+      // The container's own cgroup limit (plan-driven, set as HostConfig.Memory
+      // in createContainer), not the node's total RAM -- ram_used_mb is a
+      // per-container number, so the limit it's charted against has to be too.
+      // This used to read obs_nodes.memory_mb, a column migration
+      // 20260704000000 dropped: it resolved to undefined and Influx rejected
+      // every point, taking the whole persistence pass down with it.
+      const ramLimitMb = instance.memory_mb;
       try {
         const metrics = await getContainerMetrics(
           instance.container_id as string,
