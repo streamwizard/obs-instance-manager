@@ -66,7 +66,7 @@ const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
 // Authorization header on a WS upgrade, so these are registered before the
 // middleware: the upgrade handler runs first and never calls next(), so the
 // JWT check is skipped for them while every REST route still goes through it.
-instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
+instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 2000, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
 instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id, ticket) => getInstanceById(id, ticket.userId)));
 
 instances.use("*", authMiddleware);
@@ -136,6 +136,7 @@ export function proxyRoute(
 
     let upstream: WebSocket | null = null;
     let queued: (string | ArrayBufferLike)[] = [];
+    let droppedFrames = 0;
 
     return {
       onOpen(_event, ws) {
@@ -187,7 +188,14 @@ export function proxyRoute(
       },
       onMessage(event, _ws) {
         if (!limiter.allow()) {
-          debug("ws", `${id}:${port} message dropped, rate limit exceeded`);
+          // Dropping a frame out of the RFB byte stream can lose input events
+          // (clipboard cut-text especially) or desync the parser entirely, so
+          // this must be loud enough to spot -- warn once per connection.
+          droppedFrames += 1;
+          if (droppedFrames === 1) {
+            log("warn", "ws proxy dropping client frames, rate limit exceeded", { id, port });
+          }
+          debug("ws", `${id}:${port} message dropped, rate limit exceeded (${droppedFrames} total)`);
           return;
         }
 
