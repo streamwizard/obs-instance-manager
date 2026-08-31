@@ -1,14 +1,23 @@
 export type InstanceStatus = "creating" | "running" | "stopped" | "error";
 
+// Mirrors the obs_nodes row returned verbatim by GET /api/nodes/me (plus
+// command_key_hash). Keep it in sync with the table: memory_mb/cpu_quota/
+// vram_mb/shm_size were dropped from obs_nodes in migration
+// 20260704000000_obs_nodes_self_report_capacity, but stayed declared here, so
+// reading node.memory_mb type-checked and returned undefined at runtime --
+// which is what broke every metrics persistence pass.
 export interface Node {
   id: string;
   name: string;
   max_instances: number;
-  memory_mb: number;
-  cpu_quota: number;
-  vram_mb: number;
-  total_vram_mb: number;
-  shm_size: string;
+  // Self-reported hardware inventory, populated at claim time by install.sh.
+  // Null until the node has linked, so never write these to Influx unguarded.
+  total_vram_mb: number | null;
+  ram_total_mb: number | null;
+  cpu_cores: number | null;
+  storage_total_mb: number | null;
+  gpu_model: string | null;
+  hostname: string | null;
   gpu_bus_id: string;
   // Consumer NVIDIA drivers cap concurrent NVENC sessions (8 as of the 500+
   // driver series) independent of VRAM headroom; Quadro/RTX-A cards have no
