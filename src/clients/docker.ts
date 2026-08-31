@@ -6,6 +6,7 @@ import { refreshNodeInstances } from "../services/instance-cache";
 import { trackInstanceEvent } from "../services/influx-metrics";
 import { StreamwizardApi } from "./streamwizard-api";
 import { broadcastLifecycle } from "./ws-server";
+import { parseCpuset, pickLeastUsedCores } from "../utils/cpuset";
 import type { Instance, InstanceStatus } from "../types";
 
 // Imported lazily to avoid a circular dependency (obs-config imports s3, s3
@@ -126,6 +127,46 @@ export interface CreateContainerOptions {
   shm_size: string;
 }
 
+// Picks the CpusetCpus value for a new instance: the ceil(cpu_quota) cores that
+// the fewest live instance containers are already pinned to. See utils/cpuset.ts
+// for why pinning is needed at all on top of NanoCpus, and why the windows are
+// allowed to overlap. Returns undefined (no pinning, the previous behaviour)
+// whenever pinning can't help or the node's state can't be read -- a failure to
+// balance cores must never block a start.
+async function allocateCpuset(cpuQuota: number): Promise<string | undefined> {
+  const want = Math.ceil(cpuQuota);
+  if (!Number.isFinite(want) || want < 1) return undefined;
+
+  try {
+    const info = await docker.info();
+    const total: number = info?.NCPU ?? 0;
+    // Nothing to constrain: the instance may already use every core.
+    if (!Number.isInteger(total) || total < 1 || want >= total) return undefined;
+
+    const running = await docker.listContainers({
+      all: false,
+      filters: { name: ["obs-instance-"] },
+    });
+
+    const usage = new Array<number>(total).fill(0);
+    for (const summary of running) {
+      const details = await docker.getContainer(summary.Id).inspect();
+      for (const core of parseCpuset(details.HostConfig?.CpusetCpus, total)) {
+        usage[core] = (usage[core] ?? 0) + 1;
+      }
+    }
+
+    const cpuset = pickLeastUsedCores(usage, want).join(",");
+    debug("docker", `pinning new instance to cores ${cpuset} of ${total}`);
+    return cpuset;
+  } catch (err) {
+    log("warn", "cpuset allocation failed, creating container unpinned", {
+      error: (err as Error).message,
+    });
+    return undefined;
+  }
+}
+
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
@@ -134,6 +175,7 @@ export async function createContainer(
   await ensureImagePulled(IMAGE);
 
   const memoryBytes = memory_mb * 1024 * 1024;
+  const cpusetCpus = await allocateCpuset(cpu_quota);
 
   const container = await docker.createContainer({
     name: containerName,
@@ -171,6 +213,11 @@ export async function createContainer(
       MemorySwap: memoryBytes,
 
       NanoCpus: Math.round(cpu_quota * 1000000000),
+      // NanoCpus alone caps CPU *time* but leaves affinity at every host core,
+      // so OBS/Chromium/Qt size their thread pools for the whole node. Pinning
+      // the same core count the quota buys keeps nproc honest -- see
+      // allocateCpuset above.
+      ...(cpusetCpus ? { CpusetCpus: cpusetCpus } : {}),
 
       Binds: [
         `/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`,
