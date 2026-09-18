@@ -72,6 +72,10 @@
 #   --purge-docker           Uninstall Docker engine + containerd entirely (affects the whole host)
 #   --purge-nvidia-toolkit   Uninstall nvidia-container-toolkit and strip the nvidia runtime from daemon.json
 #   --purge-tailscale        Bring Tailscale down and uninstall it entirely
+#   --purge-nvidia-driver    Uninstall the NVIDIA driver packages (nvidia-driver-*, libnvidia-*, the
+#                            Ubuntu prebuilt modules, ubuntu-drivers-common) so the next install.sh
+#                            run exercises the driver install + reboot path again. Needs a reboot
+#                            afterwards. Not part of --all.
 #   --remove-dns             Remove the Cloudflare DNS drop-in install.sh wrote for systemd-resolved
 #   --remove-static-ip       Remove the netplan file install.sh wrote for --static-ip and go back to
 #                            the OS default (usually DHCP). Never part of --all: the address may
@@ -98,6 +102,7 @@ DISABLE_UFW="false"
 PURGE_DOCKER="false"
 PURGE_NVIDIA_TOOLKIT="false"
 PURGE_TAILSCALE="false"
+PURGE_NVIDIA_DRIVER="false"
 REMOVE_DNS="false"
 REMOVE_STATIC_IP="false"
 SKIP_CONFIRM="false"
@@ -123,6 +128,7 @@ for arg in "$@"; do
     --purge-docker) PURGE_DOCKER="true" ;;
     --purge-nvidia-toolkit) PURGE_NVIDIA_TOOLKIT="true" ;;
     --purge-tailscale) PURGE_TAILSCALE="true" ;;
+    --purge-nvidia-driver) PURGE_NVIDIA_DRIVER="true" ;;
     --remove-dns) REMOVE_DNS="true" ;;
     --remove-static-ip) REMOVE_STATIC_IP="true" ;;
     --all) REMOVE_UFW_RULE="true"; DISABLE_UFW="true"; PURGE_DOCKER="true"; PURGE_NVIDIA_TOOLKIT="true"; PURGE_TAILSCALE="true"; REMOVE_DNS="true" ;;
@@ -145,6 +151,7 @@ log "  - the docker.service drop-in that orders Docker after tailscaled ($DOCKER
 [ "$PURGE_DOCKER" = "true" ] && log "  - Docker engine + containerd entirely (affects anything else on this host using Docker)"
 [ "$PURGE_NVIDIA_TOOLKIT" = "true" ] && log "  - nvidia-container-toolkit and the nvidia runtime entry in daemon.json"
 [ "$PURGE_TAILSCALE" = "true" ] && log "  - Tailscale entirely (tailscale down + package removal)"
+[ "$PURGE_NVIDIA_DRIVER" = "true" ] && log "  - the NVIDIA driver packages (reboot needed afterwards; nvidia-smi will be gone)"
 [ "$REMOVE_DNS" = "true" ] && log "  - the Cloudflare DNS drop-in at $DNS_DROPIN (systemd-resolved goes back to the OS default)"
 [ "$REMOVE_STATIC_IP" = "true" ] && log "  - the static-IP netplan file $NETPLAN_FILE (back to the OS default network config; your SSH session may drop)"
 log "This will NOT touch: the NVIDIA driver, SSH, or anything outside the above."
