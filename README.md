@@ -48,10 +48,15 @@ runs). The static address is applied as the very last step because a changed
 address drops your SSH session. Run `scripts/install.sh --help` for all
 options.
 
-This requires GPU passthrough already configured at the hypervisor level and
-the NVIDIA driver already installed on the host — the script checks for both
-and exits with instructions rather than attempting to install kernel drivers
-itself.
+This requires GPU passthrough already configured at the hypervisor level (the
+script checks `lspci` and exits if no NVIDIA GPU is visible). The NVIDIA
+driver itself is installed when missing: `ubuntu-drivers install` picks the
+recommended package (override with `--nvidia-driver=nvidia-driver-550`, or
+`--skip-nvidia-driver` to fail instead). The kernel module only loads after
+a reboot, so the box reboots once and the install resumes by itself through
+a oneshot systemd unit with the same arguments; follow it with
+`tail -f /var/log/streamwizard-install.log`. Secure Boot must be off, since
+an unattended run can't enrol a MOK key for the module.
 
 ### Updating a node
 

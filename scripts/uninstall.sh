@@ -185,6 +185,15 @@ fi
 log "Removing $REPO_DIR..."
 rm -rf "$REPO_DIR"
 
+# Leftover from an install that rebooted for the NVIDIA driver and never
+# came back (the resumed run normally removes this itself).
+if [ -f /etc/systemd/system/streamwizard-install-resume.service ]; then
+  log "Removing the stale install-resume unit..."
+  systemctl disable streamwizard-install-resume.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/streamwizard-install-resume.service
+  systemctl daemon-reload 2>/dev/null || true
+fi
+
 if [ -f "$DOCKER_DROPIN" ]; then
   log "Removing the docker.service ordering drop-in..."
   rm -f "$DOCKER_DROPIN"
