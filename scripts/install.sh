@@ -818,8 +818,13 @@ fi
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
+# Without a terminal (the resume log) docker prints a line per layer tick,
+# thousands of them for a multi-GB image; --quiet keeps the log readable.
+DOCKER_PULL_QUIET=""
+[ -t 1 ] || DOCKER_PULL_QUIET="--quiet"
+
 log "Pre-pulling the OBS container image (multi-GB, can take a while)..."
-sudo -u "$SERVICE_USER" docker pull ghcr.io/streamwizard/obs-cloud-container:latest \
+sudo -u "$SERVICE_USER" docker pull $DOCKER_PULL_QUIET ghcr.io/streamwizard/obs-cloud-container:latest \
   || warn "Pre-pull of the OBS image failed; it will be pulled on first instance creation instead."
 
 log "Pulling the obs-instance-manager image as $SERVICE_USER..."
@@ -828,7 +833,7 @@ log "Pulling the obs-instance-manager image as $SERVICE_USER..."
 # via the shell environment (which takes precedence over .env for
 # interpolation) when the node hasn't joined Tailscale yet -- the real value
 # in .env is what `up` sees, and the gate below refuses to `up` without it.
-sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && TAILSCALE_IP=\"\${TAILSCALE_IP:-0.0.0.0}\" docker compose pull"
+sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && TAILSCALE_IP=\"\${TAILSCALE_IP:-0.0.0.0}\" docker compose pull $DOCKER_PULL_QUIET"
 
 # TAILSCALE_IP is in this list on purpose: docker-compose.yml binds the API
 # port to it, and Docker-published ports bypass ufw entirely -- so with a
