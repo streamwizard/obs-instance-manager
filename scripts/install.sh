@@ -321,6 +321,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# A oneshot inherits DefaultTimeoutStartSec (90s) and gets SIGTERMed when it
+# runs longer -- an install with multi-GB image pulls always does.
+TimeoutStartSec=infinity
 ExecStart=/bin/bash $resume_sh
 StandardOutput=append:$RESUME_LOG
 StandardError=append:$RESUME_LOG
