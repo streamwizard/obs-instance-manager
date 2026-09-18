@@ -256,6 +256,19 @@ PY
   fi
 fi
 
+if [ "$PURGE_NVIDIA_DRIVER" = "true" ]; then
+  log "Purging the NVIDIA driver packages..."
+  # apt treats an argument with regex characters as a pattern. Covers the
+  # DKMS driver (nvidia-driver-*, libnvidia-*), Ubuntu's prebuilt signed
+  # modules (linux-modules-nvidia-*, linux-objects-nvidia-*,
+  # linux-signatures-nvidia-*) and the helper that picked them.
+  apt-get purge -y '^nvidia-driver-.*' '^nvidia-.*-[0-9]+.*' '^libnvidia-.*' '^linux-modules-nvidia-.*' '^linux-objects-nvidia-.*' '^linux-signatures-nvidia-.*' '^xserver-xorg-video-nvidia-.*' ubuntu-drivers-common >/dev/null 2>&1 || true
+  apt-get autoremove -y --purge >/dev/null 2>&1 || true
+  rm -f /etc/modprobe.d/nvidia*.conf
+  update-initramfs -u >/dev/null 2>&1 || true
+  warn "NVIDIA driver removed. Reboot before re-running install.sh so the kernel module is actually gone."
+fi
+
 if [ "$PURGE_TAILSCALE" = "true" ]; then
   log "Purging Tailscale..."
   command -v tailscale >/dev/null && tailscale down >/dev/null 2>&1 || true
