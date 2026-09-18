@@ -511,7 +511,7 @@ fi
 # we're about to restrict port 22 to, enabling ufw would cut it off (and every
 # future one). sudo strips SSH_CONNECTION, so fall back to the kernel's view
 # of established :22 connections. Best effort -- if nothing is found, carry on.
-SSH_PEER_IP="${SSH_CONNECTION%% *}"
+SSH_PEER_IP="${SSH_CONNECTION:-}"; SSH_PEER_IP="${SSH_PEER_IP%% *}"
 if [ -z "$SSH_PEER_IP" ] && command -v ss >/dev/null; then
   SSH_PEER_IP="$(ss -Htn state established '( sport = :22 )' 2>/dev/null | awk '{print $4}' | head -n1 | sed -E 's/^\[?::ffff:([0-9.]+)\]?:[0-9]+$/\1/; s/:[0-9]+$//' || true)"
 fi
