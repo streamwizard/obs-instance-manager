@@ -5,15 +5,19 @@ REST API backend that manages OBS cloud containers on demand. Each container run
 Instance containers publish no ports to the host at all — noVNC and the OBS
 websocket are reached by proxying through this API itself
 (`/instances/:id/novnc`, `/instances/:id/obsws`) over a Docker-internal
-network. The only port a node needs open is the API's own (`3000` by
-default). This is what lets a node be added to the firewall once, regardless
-of how many concurrent OBS instances it runs.
+network. The only port a node exposes is the API's own (`3000`), bound to
+loopback and to the node's Tailscale address — never the LAN or a public
+interface. Browsers and the panel apps reach it through a Cloudflare Tunnel
+running on the node (`cloudflared` origin `http://localhost:3000`, hostname
+set as the node's `api_url` in web-admin); tailnet hosts such as the alert
+worker reach it over Tailscale. Tailscale is also what lets the OBS
+containers pull SRT from an ingest node.
 
 ## Setting up a new node
 
 `scripts/install.sh` provisions a fresh Ubuntu host end to end (Docker, the
-NVIDIA Container Toolkit, the `obs-net` Docker network, ufw rules, and a
-dedicated `obs` service account):
+NVIDIA Container Toolkit, Tailscale, the `obs-net` Docker network, ufw rules,
+and a dedicated `obs` service account):
 
 ```bash
 sudo bash scripts/install.sh --start
@@ -26,12 +30,23 @@ A node never gets a copy of this source. The installer fetches just
 to `main` (see `.github/workflows/build-images.yml`). Pass `--ref` to install
 from a branch or tag other than `main`.
 
-By default it only opens the firewall to your auto-detected LAN `/24` and
-expects you to fill in `.env` by hand afterward (`NODE_ID`, `NODE_API_KEY`,
-`REST_API_URL`, `SUPABASE_URL`). If a panel implementing the claim handshake
-in `docs/PANEL_INTEGRATION.md` exists, pass `--rest-api-url` and `--token`
-instead and the script links itself automatically. Run
-`scripts/install.sh --help` for all options.
+By default it only opens SSH to your auto-detected LAN network (override with
+`--ssh-cidr`), allows the API port in on `tailscale0` only, and expects you
+to fill in `.env` by hand afterward (`NODE_ID`, `NODE_API_KEY`,
+`REST_API_URL`, `SUPABASE_URL`, `TAILSCALE_IP`). Pass `--tailscale-authkey`
+to have it join the tailnet for you in this manual mode. If a panel
+implementing the claim handshake in `docs/PANEL_INTEGRATION.md` exists, pass
+`--rest-api-url` and `--token` instead: the script links itself, joins
+Tailscale with a key the panel mints, and reports its Tailscale IP back so
+the panel knows where to reach it. It refuses `--start` until the node has a
+Tailscale IP, since `docker-compose.yml` binds the API to that address. It
+also points systemd-resolved at Cloudflare DNS and, on request, gives the
+primary NIC a static address via netplan: pass `--static-ip=10.0.0.5/24`
+(and `--gateway=` if the current default route isn't right), or answer the
+question it asks on the terminal (`--no-prompt` skips it for unattended
+runs). The static address is applied as the very last step because a changed
+address drops your SSH session. Run `scripts/install.sh --help` for all
+options.
 
 This requires GPU passthrough already configured at the hypervisor level and
 the NVIDIA driver already installed on the host — the script checks for both
@@ -57,22 +72,24 @@ go back to tracking `:latest`. This never requires editing
 ### Removing a node
 
 `scripts/uninstall.sh` reverses `install.sh`: it stops the stack, removes the
-OBS containers/images and the `obs-net` network, deletes `/data/obs-configs`
-and `/opt/obs-instance-manager`, and removes the `obs` service account. The
-installer drops a copy at `/opt/obs-instance-manager/uninstall.sh`, so
-teardown needs no network access.
+OBS containers/images and the `obs-net` network, deletes `/data/obs-configs`,
+`/data/obs-plugins` and `/opt/obs-instance-manager`, and removes the `obs`
+service account. The installer drops a copy at
+`/opt/obs-instance-manager/uninstall.sh`, so teardown needs no network access.
 
 ```bash
 sudo bash scripts/uninstall.sh
 ```
 
-By default it leaves Docker, the NVIDIA Container Toolkit, and ufw installed
-(other things on the host may depend on them). Pass `--purge-docker`,
-`--purge-nvidia-toolkit`, `--remove-ufw-rule`, and/or `--disable-ufw` (or
-`--all` for all four) to fully reset a host back to a pre-`install.sh` state
-— useful when testing the installer itself. Run `scripts/uninstall.sh --help`
-for all options; it always asks for confirmation first unless `--yes` is
-given.
+By default it leaves Docker, the NVIDIA Container Toolkit, Tailscale, and ufw
+installed (other things on the host may depend on them). Pass
+`--purge-docker`, `--purge-nvidia-toolkit`, `--purge-tailscale`,
+`--remove-ufw-rule`, `--remove-dns`, and/or `--disable-ufw` (or `--all` for
+all six) to fully reset a host back to a pre-`install.sh` state — useful when
+testing the installer itself. `--remove-static-ip` (never part of `--all`,
+since the address may change under your SSH session) drops the netplan file
+`--static-ip` wrote. Run `scripts/uninstall.sh --help` for all options; it
+always asks for confirmation first unless `--yes` is given.
 
 ## Prerequisites
 
