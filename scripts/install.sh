@@ -333,6 +333,7 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable streamwizard-install-resume.service >/dev/null 2>&1
+  log "Resume unit: $(systemctl show streamwizard-install-resume.service -p Type -p TimeoutStartUSec 2>/dev/null | tr '\n' ' ')"
   log "NVIDIA driver installed. Rebooting now; the install resumes by itself after boot."
   log "Follow it with: tail -f $RESUME_LOG   (this SSH session will drop)"
   sleep 2
@@ -340,12 +341,24 @@ EOF
   exit 0
 }
 
-# First thing a resumed run does: dismantle the resume machinery so a second
-# failure can't loop the box, and drop the args file holding the token.
+# First thing a resumed run does: make sure it can't run again (drop the
+# wants-symlink) and drop the args file holding the claim token. The unit
+# file itself deliberately stays until the run is over -- deleting it and
+# reloading systemd while this very service is still running makes systemd
+# replace the running instance's definition with defaults (Type=simple, 90s
+# start timeout), which SIGTERMs the install mid-pull. `disable` is safe:
+# it reloads with the file still present.
 clear_resume() {
   systemctl disable streamwizard-install-resume.service >/dev/null 2>&1 || true
-  rm -f "$RESUME_UNIT" "$REPO_DIR/install-resume.sh" "$REPO_DIR/.install-resume-args"
-  systemctl daemon-reload 2>/dev/null || true
+  rm -f "$REPO_DIR/.install-resume-args"
+}
+
+# Last thing a resumed run does. No daemon-reload here on purpose (see
+# clear_resume); systemd simply won't find the unit at the next reload or
+# boot, and it is already disabled.
+finish_resume() {
+  [ "$RESUMED" = "true" ] || return 0
+  rm -f "$RESUME_UNIT" "$REPO_DIR/install-resume.sh"
 }
 
 for arg in "$@"; do
@@ -864,6 +877,7 @@ else
 fi
 
 log "Done."
+finish_resume
 
 # Must stay the last thing in this script: an address change drops the SSH
 # session (and this process with it). Nothing below this line would run.
