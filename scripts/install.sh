@@ -78,6 +78,13 @@
 #                              on the terminal (answer N or pass --no-prompt to keep DHCP).
 #   --gateway=IP               Default gateway for --static-ip (default: the current default route)
 #   --no-prompt                Never ask questions on the terminal (unattended installs)
+#   --nvidia-driver=PKG        NVIDIA driver package to install when nvidia-smi is missing, e.g.
+#                              nvidia-driver-550 (default: whatever `ubuntu-drivers` recommends).
+#                              The kernel module only loads after a reboot, so the box reboots once
+#                              and this script resumes itself with the same arguments; follow along
+#                              with: tail -f /var/log/streamwizard-install.log
+#   --skip-nvidia-driver       Never install the driver; fail if nvidia-smi is missing
+#   --resume                   Internal: set by the post-reboot resume service
 #   --ref=REF                  Branch/tag to fetch docker-compose.yml and .env.example from
 #                              (default: main)
 #   --repo-dir=DIR             Config directory holding docker-compose.yml/.env
@@ -96,8 +103,14 @@ SSH_CIDR_EXPLICIT="false"
 STATIC_IP=""
 GATEWAY=""
 NO_PROMPT="false"
+NVIDIA_DRIVER_PKG=""
+SKIP_NVIDIA_DRIVER="false"
+RESUMED="false"
 NETPLAN_FILE="/etc/netplan/99-streamwizard-static.yaml"
 CLOUD_INIT_NET_OFF="/etc/cloud/cloud.cfg.d/99-streamwizard-disable-network-config.cfg"
+RESUME_UNIT="/etc/systemd/system/streamwizard-install-resume.service"
+RESUME_LOG="/var/log/streamwizard-install.log"
+ORIGINAL_ARGS=("$@")
 # Node installs don't clone the repo -- they just need docker-compose.yml and
 # .env.example, fetched straight from GitHub at the given ref. This keeps a
 # fresh node from needing the whole source tree just to run a prebuilt image
@@ -219,6 +232,72 @@ EOF
   netplan apply
 }
 
+# The NVIDIA kernel module can't be loaded into a running kernel that has
+# nouveau bound to the card, so a driver install needs one reboot. Rather than
+# telling the admin "reboot and run the command again", stash a copy of this
+# script plus its arguments and a oneshot unit that runs it at next boot.
+# The arguments file holds the claim token, so it's root-only and deleted the
+# moment the resumed run starts. Static-IP answers given at the prompt are
+# carried over as flags (the resumed run has no terminal).
+schedule_resume_after_reboot() {
+  local resume_sh="$REPO_DIR/install-resume.sh" resume_args="$REPO_DIR/.install-resume-args"
+  mkdir -p "$REPO_DIR"
+  curl_with_backoff -fsSL -o "$REPO_DIR/install.sh" "$RAW_BASE/$REF/scripts/install.sh" \
+    || die "Driver installed but couldn't fetch a copy of install.sh to resume after the reboot. Reboot, then run the same install command again."
+  chmod 700 "$REPO_DIR/install.sh"
+
+  : > "$resume_args"
+  chmod 600 "$resume_args"
+  local a
+  for a in ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}; do
+    case "$a" in
+      --static-ip=*|--gateway=*|--no-prompt|--resume) ;;
+      *) printf '%s\n' "$a" >> "$resume_args" ;;
+    esac
+  done
+  [ -z "$STATIC_IP" ] || printf '%s\n' "--static-ip=$STATIC_IP" "--gateway=$GATEWAY" >> "$resume_args"
+  printf '%s\n' "--no-prompt" "--resume" >> "$resume_args"
+
+  cat > "$resume_sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+mapfile -t args < "$resume_args"
+exec /bin/bash "$REPO_DIR/install.sh" "\${args[@]}"
+EOF
+  chmod 700 "$resume_sh"
+
+  cat > "$RESUME_UNIT" <<EOF
+[Unit]
+Description=StreamWizard node installer (resume after NVIDIA driver reboot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $resume_sh
+StandardOutput=append:$RESUME_LOG
+StandardError=append:$RESUME_LOG
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable streamwizard-install-resume.service >/dev/null 2>&1
+  log "NVIDIA driver installed. Rebooting now; the install resumes by itself after boot."
+  log "Follow it with: tail -f $RESUME_LOG   (this SSH session will drop)"
+  sleep 2
+  reboot
+  exit 0
+}
+
+# First thing a resumed run does: dismantle the resume machinery so a second
+# failure can't loop the box, and drop the args file holding the token.
+clear_resume() {
+  systemctl disable streamwizard-install-resume.service >/dev/null 2>&1 || true
+  rm -f "$RESUME_UNIT" "$REPO_DIR/install-resume.sh" "$REPO_DIR/.install-resume-args"
+  systemctl daemon-reload 2>/dev/null || true
+}
+
 for arg in "$@"; do
   case "$arg" in
     --rest-api-url=*) REST_API_URL="${arg#*=}" ;;
@@ -228,6 +307,9 @@ for arg in "$@"; do
     --static-ip=*) STATIC_IP="${arg#*=}" ;;
     --gateway=*) GATEWAY="${arg#*=}" ;;
     --no-prompt) NO_PROMPT="true" ;;
+    --nvidia-driver=*) NVIDIA_DRIVER_PKG="${arg#*=}" ;;
+    --skip-nvidia-driver) SKIP_NVIDIA_DRIVER="true" ;;
+    --resume) RESUMED="true"; NO_PROMPT="true" ;;
     --ref=*) REF="${arg#*=}" ;;
     --repo-dir=*) REPO_DIR="${arg#*=}" ;;
     --service-user=*) SERVICE_USER="${arg#*=}" ;;
@@ -238,6 +320,11 @@ for arg in "$@"; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "Must run as root (sudo bash install.sh ...)"
+
+if [ "$RESUMED" = "true" ]; then
+  log "Resuming after the NVIDIA driver reboot..."
+  clear_resume
+fi
 
 log "Installing baseline packages..."
 # Fresh images regularly ship with stale (or no) apt lists; refresh before the
@@ -273,8 +360,44 @@ fi
 
 log "Checking GPU and NVIDIA stack..."
 lspci | grep -qi nvidia || die "No NVIDIA GPU detected via lspci. This installer requires GPU passthrough already configured at the hypervisor level."
-command -v nvidia-smi >/dev/null || die "nvidia-smi not found. Install the NVIDIA driver on the host first (this installer will not install kernel drivers for you), then re-run."
-nvidia-smi >/dev/null || die "nvidia-smi found but failed to run. Check the driver install before continuing."
+
+if command -v nvidia-smi >/dev/null && nvidia-smi >/dev/null 2>&1; then
+  log "NVIDIA driver working ($(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1))."
+else
+  if [ "$RESUMED" = "true" ]; then
+    die "NVIDIA driver still isn't working after the reboot. Check 'dmesg | grep -i nvidia', 'ubuntu-drivers devices' and 'dkms status', fix it by hand, then re-run the install command."
+  fi
+  if [ "$SKIP_NVIDIA_DRIVER" = "true" ]; then
+    die "nvidia-smi not found or not working, and --skip-nvidia-driver was given. Install the NVIDIA driver on the host, reboot, then re-run."
+  fi
+  # A DKMS-built module has to be signed with a key the firmware trusts, and
+  # enrolling one (MOK) is an interactive step at the next boot -- nothing an
+  # unattended installer can do. Better to stop here than reboot into a box
+  # where the module silently refuses to load.
+  if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi "enabled"; then
+    die "Secure Boot is enabled, so the NVIDIA kernel module can't be installed unattended (it needs a MOK-signed build). Disable Secure Boot in the BIOS/hypervisor, or install the driver by hand and reboot, then re-run."
+  fi
+
+  if dpkg -l 2>/dev/null | grep -qE '^ii[[:space:]]+nvidia-driver-[0-9]+'; then
+    log "NVIDIA driver package is installed but the module isn't loaded yet; a reboot is needed."
+  else
+    log "Installing the NVIDIA driver..."
+    apt-get install -y --no-install-recommends ubuntu-drivers-common >/dev/null
+    # DKMS needs the running kernel's headers; the metapackage is usually
+    # already there, and ubuntu-drivers pulls what it needs, so non-fatal.
+    apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
+    if [ -n "$NVIDIA_DRIVER_PKG" ]; then
+      apt-get install -y "$NVIDIA_DRIVER_PKG" || die "apt-get install $NVIDIA_DRIVER_PKG failed."
+    else
+      # `ubuntu-drivers install` picks the recommended full driver (not the
+      # headless/-gpgpu variant: the gpu-xserver container needs the host's
+      # GL libraries mounted in by the container toolkit).
+      log "Recommended driver: $(ubuntu-drivers devices 2>/dev/null | grep -m1 recommended | awk '{print $3}' || echo unknown)"
+      ubuntu-drivers install 2>/dev/null || ubuntu-drivers autoinstall || die "ubuntu-drivers couldn't install a driver. Pass --nvidia-driver=<package> (see 'ubuntu-drivers devices') and re-run."
+    fi
+  fi
+  schedule_resume_after_reboot
+fi
 
 if ! dpkg -l nvidia-container-toolkit >/dev/null 2>&1; then
   log "Installing nvidia-container-toolkit..."

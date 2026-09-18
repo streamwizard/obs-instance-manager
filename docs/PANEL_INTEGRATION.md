@@ -52,7 +52,8 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    in the node's `.env`.
 
 3. **Admin runs that command on the new VM.** `install.sh` provisions the
-   host (Docker, NVIDIA toolkit check, Tailscale, `obs-net` network, ufw,
+   host (NVIDIA driver if missing — with one automatic reboot and resume —
+   plus the container toolkit, Docker, Tailscale, `obs-net` network, ufw,
    `obs` service user, and `/opt/obs-instance-manager` holding the fetched
    `docker-compose.yml`) and then calls:
 
