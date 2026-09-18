@@ -144,6 +144,53 @@ curl_with_backoff() {
   done
 }
 
+# apt-get install with a progress bar. apt reports download and install
+# progress on the fd named by APT::Status-Fd as "dlstatus:<n>:<pct>:<text>"
+# and "pmstatus:<pkg>:<pct>:<text>" lines; this renders the last one. On a
+# terminal it's a live single-line bar; without one (the post-reboot resume
+# run, whose output goes to a log file) it's a plain line every 30s so the
+# log still shows the install is alive during the multi-minute DKMS build.
+apt_install_with_bar() {
+  local label="$1"; shift
+  local status logf pid rc start elapsed kind pct text bar filled i last_logged=-1
+  status="$(mktemp)"; logf="$(mktemp)"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -o APT::Status-Fd=3 "$@" >"$logf" 2>&1 3>"$status" &
+  pid=$!
+  start=$SECONDS
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$((SECONDS - start))
+    IFS=: read -r kind _ pct text <<< "$(tail -n1 "$status" 2>/dev/null || true)"
+    pct="${pct%%.*}"; pct="${pct:-0}"
+    case "$kind" in
+      dlstatus) kind="downloading" ;;
+      pmstatus) kind="installing" ;;
+      *) kind="starting"; pct=0; text="" ;;
+    esac
+    if [ -t 1 ]; then
+      filled=$((pct * 30 / 100)); bar=""
+      for ((i = 0; i < 30; i++)); do
+        if [ "$i" -lt "$filled" ]; then bar="${bar}#"; else bar="${bar}-"; fi
+      done
+      printf '\r\033[K[streamwizard] [install] %s: [%s] %3d%% %s \xc2\xb7 %02d:%02d \xc2\xb7 %s' \
+        "$label" "$bar" "$pct" "$kind" $((elapsed / 60)) $((elapsed % 60)) "${text:0:50}"
+    elif [ $((elapsed / 30)) -ne "$last_logged" ]; then
+      last_logged=$((elapsed / 30))
+      log "$label: ${pct}% $kind ($((elapsed / 60))m$((elapsed % 60))s) ${text}"
+    fi
+    sleep 1
+  done
+  wait "$pid"; rc=$?
+  [ -t 1 ] && printf '\r\033[K'
+  if [ "$rc" -ne 0 ]; then
+    warn "$label failed (apt-get exit $rc). Last output:"
+    tail -n 25 "$logf" >&2
+  else
+    log "$label: done in $(( (SECONDS - start) / 60 ))m$(( (SECONDS - start) % 60 ))s."
+  fi
+  rm -f "$status" "$logf"
+  return "$rc"
+}
+
 # Prints the header comment block (everything between the banner and
 # `set -euo pipefail`) so the help text can't drift from a hard-coded range.
 print_help() {
@@ -387,14 +434,17 @@ else
     # already there, and ubuntu-drivers pulls what it needs, so non-fatal.
     apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
     if [ -n "$NVIDIA_DRIVER_PKG" ]; then
-      apt-get install -y "$NVIDIA_DRIVER_PKG" || die "apt-get install $NVIDIA_DRIVER_PKG failed."
+      DRIVER_PKG="$NVIDIA_DRIVER_PKG"
     else
-      # `ubuntu-drivers install` picks the recommended full driver (not the
-      # headless/-gpgpu variant: the gpu-xserver container needs the host's
-      # GL libraries mounted in by the container toolkit).
-      log "Recommended driver: $(ubuntu-drivers devices 2>/dev/null | grep -m1 recommended | awk '{print $3}' || echo unknown)"
-      ubuntu-drivers install 2>/dev/null || ubuntu-drivers autoinstall || die "ubuntu-drivers couldn't install a driver. Pass --nvidia-driver=<package> (see 'ubuntu-drivers devices') and re-run."
+      # Take the package `ubuntu-drivers` recommends (the full driver, not
+      # the headless/-gpgpu variant: the gpu-xserver container needs the
+      # host's GL libraries mounted in by the container toolkit) and install
+      # it ourselves so apt's progress feed can drive the bar below.
+      DRIVER_PKG="$(ubuntu-drivers devices 2>/dev/null | awk '/^driver.*recommended/ {print $3; exit}')"
+      [ -n "$DRIVER_PKG" ] || die "ubuntu-drivers found no recommended driver for this GPU. Pass --nvidia-driver=<package> (see 'ubuntu-drivers devices') and re-run."
     fi
+    log "Installing $DRIVER_PKG (a few minutes; the DKMS kernel-module build is the slow part)..."
+    apt_install_with_bar "NVIDIA driver" "$DRIVER_PKG" || die "Installing $DRIVER_PKG failed. Fix the apt error above (or pass a different --nvidia-driver=<package>) and re-run."
   fi
   schedule_resume_after_reboot
 fi
