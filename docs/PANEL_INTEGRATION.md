@@ -20,15 +20,21 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
 
 1. **Admin creates a node in the panel UI.** Panel inserts a row into
    `obs_nodes` with `status = 'pending'`, the admin-chosen fields (`name`,
-   `api_url`, `max_instances`), and a freshly generated **claim token**. Store
-   only a hash of the token (e.g. SHA-256), with an expiry (suggest 15–30
-   minutes, matching Wings' UX) — the same way you'd store a password reset
-   token.
+   `max_instances`, and optionally `api_url`), and a freshly generated
+   **claim token**. Store only a hash of the token (e.g. SHA-256), with an
+   expiry (suggest 15–30 minutes, matching Wings' UX) — the same way you'd
+   store a password reset token.
+
+   `api_url` is normally left blank: the node fills it in itself as
+   `http://<tailscale-ip>:3000` once it has joined Tailscale (step 5). Set it
+   by hand only to override that, e.g. with a Cloudflare Tunnel hostname when
+   browsers outside the tailnet need to reach the node.
 
    Everything else about the physical node — `gpu_bus_id`, `total_vram_mb`,
-   `ram_total_mb`, `cpu_cores`, `gpu_model`, `storage_total_mb`, `hostname` —
-   is left blank at creation time; the node reports these facts about itself
-   during claim, since it can't be known until the node calls in. (Per-instance
+   `ram_total_mb`, `cpu_cores`, `gpu_model`, `storage_total_mb`, `hostname`,
+   `tailscale_ip` — is left blank at creation time; the node reports these
+   facts about itself during claim, since it can't be known until the node
+   calls in. (Per-instance
    Docker resource limits — memory/CPU/shm — are **not** node-level fields at
    all; they come from the calling user's subscription plan at instance
    creation time, so there's nothing to collect here for them.)
@@ -46,8 +52,8 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    in the node's `.env`.
 
 3. **Admin runs that command on the new VM.** `install.sh` provisions the
-   host (Docker, NVIDIA toolkit check, `obs-net` network, ufw, `obs` service
-   user, and `/opt/obs-instance-manager` holding the fetched
+   host (Docker, NVIDIA toolkit check, Tailscale, `obs-net` network, ufw,
+   `obs` service user, and `/opt/obs-instance-manager` holding the fetched
    `docker-compose.yml`) and then calls:
 
    ```
@@ -87,6 +93,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "node_id": "<uuid, the obs_nodes.id>",
      "node_api_key": "<node's long-lived bearer credential>",
      "hostname": "gpu-box-1",
+     "tailscale_authkey": "<single-use, tag:obs-node key, or null>",
      "rest_api_url": "https://api.example.com",
      "supabase_url": "https://xxxx.supabase.co",
      "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
@@ -95,11 +102,66 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    }
    ```
 
-5. **Node writes `.env`** from that response and **sets its own hostname**
-   to the returned `hostname` (`hostnamectl set-hostname`, plus updating
-   `/etc/hosts`' `127.0.1.1` line) before bringing the stack up. This is what
+5. **Node joins Tailscale** using `tailscale_authkey` (if present), then
+   reports its address back on its own authenticated round trip:
+
+   ```
+   PATCH {rest-api-url}/api/nodes/me
+   Authorization: Bearer <node_api_key>
+   Content-Type: application/json
+
+   { "tailscale_ip": "100.64.0.10" }
+   ```
+
+   rest-api stores `tailscale_ip` on the row and, if `api_url` is still
+   blank, sets it to `http://<tailscale_ip>:3000`. An admin-set `api_url` is
+   never overwritten. The node then **writes `.env`** from the claim response
+   (including `TAILSCALE_IP`) and **sets its own hostname** to the returned
+   `hostname` (`hostnamectl set-hostname`, `/etc/hosts`' `127.0.1.1` line, and
+   `tailscale set --hostname`) before bringing the stack up. This is what
    makes a freshly imaged, generically-named VM identify itself correctly —
    matching what the panel already calls it — with no manual rename step.
+
+## Automated Tailscale join
+
+A node joins Tailscale first of all so its OBS containers can pull SRT from
+an ingest node's tailnet-only output port. It also decides where the node's
+own API (port 3000) is reachable: `docker-compose.yml` publishes it on
+`127.0.0.1:3000` and `${TAILSCALE_IP}:3000` — never the LAN, never a public
+interface — and refuses to start while `TAILSCALE_IP` is blank. ufw allows
+the port in on `tailscale0` (loopback is allowed by default). The ufw rule is
+belt-and-braces: Docker-published ports bypass ufw, so the bind addresses
+are the real control.
+
+The loopback binding is for a Cloudflare Tunnel running on the node
+(`cloudflared` origin `http://localhost:3000`): that is how browsers (noVNC,
+obs-websocket) and the panel apps reach the node, and it has no dependency
+on Tailscale being up. The admin sets the tunnel hostname as the node's
+`api_url`. The Tailscale binding is for tailnet hosts — the alert worker,
+web-admin health probes, admins — and is what the auto-filled `api_url`
+points at until the admin overrides it.
+
+So a node can join the tailnet without an admin generating and pasting a key,
+`/claim` mints one: rest-api holds a Tailscale OAuth client
+(`TAILSCALE_OAUTH_CLIENT_ID` / `TAILSCALE_OAUTH_CLIENT_SECRET`, the same one
+`/api/ingest-nodes/claim` uses) scoped to `auth_keys` for `tag:obs-node` and
+`tag:ingest-node`, and creates a single-use, pre-authorized, 1-hour key tagged
+`tag:obs-node` per claim (`apps/rest-api/src/lib/tailscale.ts`). Minting is
+non-fatal: if the Tailscale API is unreachable or the OAuth client isn't
+scoped for the tag, `/claim` still succeeds and returns
+`tailscale_authkey: null`; `install.sh` then warns and tells the admin to run
+`tailscale up` by hand, add the ufw rule, set `TAILSCALE_IP` in `.env`, and
+call `PATCH /api/nodes/me` themselves.
+
+Tailnet prerequisites (one-off, in the Tailscale admin console):
+
+- `tag:obs-node` in `tagOwners`, with the same owner as `tag:ingest-node`.
+- An ACL rule letting admins and the hosts that call nodes reach
+  `tag:obs-node:3000`; add `tag:obs-node` to the `ssh` rule too if you rely
+  on Tailscale SSH (install.sh runs `tailscale up --ssh`).
+- The OAuth client must be allowed to mint keys for `tag:obs-node`. Tailscale
+  fixes an OAuth client's tags at creation, so this usually means creating a
+  replacement client and rotating both env vars.
 
 ## Realtime admin metrics
 
@@ -120,10 +182,12 @@ separate node-wide secret, an admin's browser can open this websocket
 **directly** — `ws://{api_url}/admin/metrics/stream?token={supabase_jwt}` —
 the same way an end user's browser connects directly to `/metrics/stream`,
 `/instances/:id/novnc`, and `/instances/:id/obsws`. No panel-side relay or
-node-wide credential is needed. `api_url` (e.g. `http://10.10.10.185:3000`,
-or a Cloudflare Tunnel hostname) is set by the admin when creating the node
-in the panel UI — it's just "where do I reach this node's API", unrelated
-to the claim handshake.
+node-wide credential is needed. `api_url` defaults to the node's tailnet
+address (`http://100.64.0.10:3000`, filled in at link time — see "Automated
+Tailscale join"), which only works from a machine on the tailnet. For
+browsers, the admin overrides `api_url` with the node's Cloudflare Tunnel
+hostname in the panel UI (the tunnel's origin is the loopback binding,
+`http://localhost:3000`) — it's just "where do I reach this node's API".
 
 ## Target architecture: nodes hold no real state
 

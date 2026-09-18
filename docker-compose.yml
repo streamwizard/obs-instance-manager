@@ -8,7 +8,21 @@ services:
     container_name: obs-panel-api
     restart: unless-stopped
     ports:
-      - "${PORT:-3000}:3000"
+      # Never published on the LAN or a public interface. Two bindings:
+      #  - loopback, for sidecars on the same host -- the Cloudflare Tunnel
+      #    (cloudflared origin http://localhost:3000) is how browsers and the
+      #    panel apps reach the node, with no dependency on Tailscale;
+      #  - the Tailscale address, for tailnet hosts (alert worker, web-admin
+      #    health probes, admins) -- the panel fills obs_nodes.api_url with
+      #    http://<tailscale-ip>:3000 at link time as the default, and the
+      #    admin overrides it with the tunnel hostname.
+      # The `:?` makes compose refuse to start when TAILSCALE_IP is blank: an
+      # empty host IP would silently mean 0.0.0.0, and Docker-published ports
+      # bypass ufw, so there is no second line of defence. Local dev in a
+      # checkout: set TAILSCALE_IP=127.0.0.1 in .env (duplicate binding is
+      # harmless).
+      - "127.0.0.1:3000:3000"
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env (tailscale ip -4)}:3000:3000"
     env_file:
       - .env
     environment:
