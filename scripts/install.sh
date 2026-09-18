@@ -129,6 +129,60 @@ log()  { echo "[streamwizard] [install] $*"; }
 warn() { echo "[streamwizard] [install] WARNING: $*" >&2; }
 die()  { echo "[streamwizard] [install] ERROR: $*" >&2; exit 1; }
 
+# ── Progress helpers ─────────────────────────────────────────────────────────
+
+# Phase bar: one line per step so a reader (or someone tailing the resume
+# log) can tell at a glance how far the run is.
+STEP_TOTAL=13
+STEP_NUM=0
+step() {
+  STEP_NUM=$((STEP_NUM + 1))
+  local width=20 bar="" i filled
+  filled=$((STEP_NUM * width / STEP_TOTAL))
+  for ((i = 0; i < width; i++)); do
+    if [ "$i" -lt "$filled" ]; then bar="${bar}#"; else bar="${bar}-"; fi
+  done
+  echo
+  echo "[streamwizard] [install] [$(printf '%2d' "$STEP_NUM")/$STEP_TOTAL] [$bar] $*"
+}
+
+# Runs a long command with a spinner, elapsed time and its last output line
+# on a terminal, or a plain "still going" line every 30s without one (the
+# resume log). Output is captured; the last 25 lines are shown on failure.
+run_with_spinner() {
+  local label="$1"; shift
+  local logf pid rc=0 start elapsed last spin='|/-\' i=0 last_logged=-1
+  logf="$(mktemp)"
+  "$@" >"$logf" 2>&1 &
+  pid=$!
+  start=$SECONDS
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$((SECONDS - start))
+    last="$(tail -n1 "$logf" 2>/dev/null | tr -d '\r' | cut -c1-60)"
+    if [ -t 1 ]; then
+      printf '\r\033[K[streamwizard] [install] %s %s \xc2\xb7 %02d:%02d \xc2\xb7 %s' \
+        "${spin:i++%4:1}" "$label" $((elapsed / 60)) $((elapsed % 60)) "$last"
+      sleep 0.5
+    else
+      if [ $((elapsed / 30)) -ne "$last_logged" ]; then
+        last_logged=$((elapsed / 30))
+        log "$label ($((elapsed / 60))m$((elapsed % 60))s) $last"
+      fi
+      sleep 1
+    fi
+  done
+  wait "$pid" || rc=$?
+  [ -t 1 ] && printf '\r\033[K'
+  if [ "$rc" -ne 0 ]; then
+    warn "$label failed (exit $rc). Last output:"
+    tail -n 25 "$logf" >&2
+  else
+    log "$label: done in $(( (SECONDS - start) / 60 ))m$(( (SECONDS - start) % 60 ))s."
+  fi
+  rm -f "$logf"
+  return "$rc"
+}
+
 # Retries a curl call with exponential backoff (1s, 2s, 4s, ... up to 10 tries),
 # the same resilience Wings applies to its own outbound panel calls so a
 # transient network blip during linking doesn't fail the whole install.
@@ -152,7 +206,7 @@ curl_with_backoff() {
 # log still shows the install is alive during the multi-minute DKMS build.
 apt_install_with_bar() {
   local label="$1"; shift
-  local status logf pid rc start elapsed kind pct text bar filled i last_logged=-1
+  local status logf pid rc=0 start elapsed kind pct text bar filled i last_logged=-1
   status="$(mktemp)"; logf="$(mktemp)"
   DEBIAN_FRONTEND=noninteractive apt-get install -y -o APT::Status-Fd=3 "$@" >"$logf" 2>&1 3>"$status" &
   pid=$!
@@ -179,7 +233,7 @@ apt_install_with_bar() {
     fi
     sleep 1
   done
-  wait "$pid"; rc=$?
+  wait "$pid" || rc=$?
   [ -t 1 ] && printf '\r\033[K'
   if [ "$rc" -ne 0 ]; then
     warn "$label failed (apt-get exit $rc). Last output:"
@@ -189,6 +243,19 @@ apt_install_with_bar() {
   fi
   rm -f "$status" "$logf"
   return "$rc"
+}
+
+# docker draws its own per-layer bars on a terminal; without one it would
+# print a line per layer tick (thousands for a multi-GB image), so use
+# --quiet plus the spinner there instead.
+run_pull() {
+  local label="$1"; shift
+  if [ -t 1 ]; then
+    log "$label..."
+    "$@"
+  else
+    run_with_spinner "$label" "$@" --quiet
+  fi
 }
 
 # Prints the header comment block (everything between the banner and
@@ -389,10 +456,10 @@ if [ "$RESUMED" = "true" ]; then
   clear_resume
 fi
 
-log "Installing baseline packages..."
+step "Baseline packages"
 # Fresh images regularly ship with stale (or no) apt lists; refresh before the
 # first install below or `apt-get install` on an untouched box just fails.
-apt-get update -qq
+run_with_spinner "Refreshing apt lists" apt-get update -qq || die "apt-get update failed."
 command -v curl >/dev/null || apt-get install -y --no-install-recommends curl >/dev/null
 command -v ufw >/dev/null || apt-get install -y --no-install-recommends ufw >/dev/null
 command -v lspci >/dev/null || apt-get install -y --no-install-recommends pciutils >/dev/null
@@ -401,6 +468,7 @@ command -v lspci >/dev/null || apt-get install -y --no-install-recommends pciuti
 # some minimal cloud images don't.
 command -v python3 >/dev/null || apt-get install -y --no-install-recommends python3 >/dev/null
 
+step "Network (static IP, DNS)"
 detect_primary_nic
 prompt_static_ip
 validate_static_ip
@@ -421,7 +489,7 @@ else
   warn "systemd-resolved not detected; skipping the Cloudflare DNS baseline (leaving whatever resolver the OS already has)."
 fi
 
-log "Checking GPU and NVIDIA stack..."
+step "GPU and NVIDIA driver"
 lspci | grep -qi nvidia || die "No NVIDIA GPU detected via lspci. This installer requires GPU passthrough already configured at the hypervisor level."
 
 if command -v nvidia-smi >/dev/null && nvidia-smi >/dev/null 2>&1; then
@@ -445,7 +513,7 @@ else
     log "NVIDIA driver package is installed but the module isn't loaded yet; a reboot is needed."
   else
     log "Installing the NVIDIA driver..."
-    apt-get install -y --no-install-recommends ubuntu-drivers-common >/dev/null
+    apt_install_with_bar "Driver helper (ubuntu-drivers-common)" --no-install-recommends ubuntu-drivers-common || die "Installing ubuntu-drivers-common failed."
     # DKMS needs the running kernel's headers; the metapackage is usually
     # already there, and ubuntu-drivers pulls what it needs, so non-fatal.
     apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
@@ -465,30 +533,29 @@ else
   schedule_resume_after_reboot
 fi
 
+step "NVIDIA container toolkit"
 if ! dpkg -l nvidia-container-toolkit >/dev/null 2>&1; then
-  log "Installing nvidia-container-toolkit..."
   # --yes: overwrite a keyring left behind by an earlier partial run instead
   # of prompting (there's no tty under `curl | sudo bash`, so gpg would fail).
   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
   curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
     | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
     > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-  apt-get update -qq
-  apt-get install -y nvidia-container-toolkit
+  run_with_spinner "Refreshing apt lists (nvidia repo)" apt-get update -qq || die "apt-get update failed."
+  apt_install_with_bar "nvidia-container-toolkit" nvidia-container-toolkit || die "Installing nvidia-container-toolkit failed."
 else
   log "nvidia-container-toolkit already installed."
 fi
 
-log "Checking Docker..."
+step "Docker"
 if ! command -v docker >/dev/null; then
-  log "Installing Docker via get.docker.com..."
-  curl -fsSL https://get.docker.com | sh
+  run_with_spinner "Installing Docker (get.docker.com)" bash -c 'curl -fsSL https://get.docker.com | sh' || die "Docker install failed."
 else
   log "Docker already installed ($(docker --version))."
 fi
 systemctl enable --now docker >/dev/null
 
-log "Registering the nvidia runtime with the Docker daemon..."
+step "nvidia runtime in the Docker daemon"
 DAEMON_JSON=/etc/docker/daemon.json
 NEEDS_RESTART="false"
 if [ ! -f "$DAEMON_JSON" ]; then
@@ -513,10 +580,9 @@ else
   log "nvidia runtime already registered."
 fi
 
-log "Checking Tailscale..."
+step "Tailscale"
 if ! command -v tailscale >/dev/null; then
-  log "Installing Tailscale..."
-  curl -fsSL https://tailscale.com/install.sh | sh
+  run_with_spinner "Installing Tailscale" bash -c 'curl -fsSL https://tailscale.com/install.sh | sh' || die "Tailscale install failed."
 else
   log "Tailscale already installed."
 fi
@@ -608,7 +674,7 @@ add_tailscale_api_rule() {
   log "Opened the tailscale-only ufw rule for port $API_PORT."
 }
 
-log "Configuring ufw (SSH from $SSH_CIDR, tailscale-only API on $API_PORT/tcp)..."
+step "Firewall (SSH from $SSH_CIDR, tailscale-only API on $API_PORT/tcp)"
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
 ufw allow from "$SSH_CIDR" to any port 22 proto tcp comment "SSH" >/dev/null
@@ -618,7 +684,7 @@ fi
 ufw --force enable >/dev/null
 ufw status verbose
 
-log "Creating service account '$SERVICE_USER'..."
+step "Service account '$SERVICE_USER' and data directories"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd -m -d "/home/$SERVICE_USER" -s /usr/sbin/nologin -c "Service account for OBS containers" "$SERVICE_USER"
 fi
@@ -630,7 +696,7 @@ chown -R "$SERVICE_USER:$SERVICE_USER" /data/obs-configs
 mkdir -p /data/obs-plugins
 chown -R "$SERVICE_USER:$SERVICE_USER" /data/obs-plugins
 
-log "Fetching node config files (ref: $REF)..."
+step "Node config files (ref: $REF)"
 mkdir -p "$REPO_DIR"
 # The compose file lives at the repo root with `env_file: .env`, so it needs no
 # path rewriting -- a node's flat $REPO_DIR has the same shape.
@@ -647,7 +713,7 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
 
 ENV_FILE="$REPO_DIR/.env"
 if [ -n "$REST_API_URL" ] && [ -n "$TOKEN" ]; then
-  log "Linking to panel via rest-api at $REST_API_URL..."
+  step "Linking to panel via rest-api at $REST_API_URL"
   # nvidia-smi reports domain:bus:device.function in hex (e.g. 00000000:00:10.0).
   # Xorg's BusID option needs "PCI:bus:device:function" in decimal, so convert here
   # once at registration time rather than in every consumer of gpu_bus_id.
@@ -820,6 +886,7 @@ PY
     warn "Claim response did not include a hostname; leaving the host's hostname unchanged."
   fi
 else
+  step "Manual .env (no --rest-api-url/--token)"
   if [ ! -f "$ENV_FILE" ]; then
     curl_with_backoff -fsSL -o "$ENV_FILE" "$RAW_BASE/$REF/.env.example" \
       || die "Failed to fetch .env.example from ref '$REF'. Check the --ref value and your network connection."
@@ -834,23 +901,21 @@ fi
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
-# Without a terminal (the resume log) docker prints a line per layer tick,
-# thousands of them for a multi-GB image; --quiet keeps the log readable.
-DOCKER_PULL_QUIET=""
-[ -t 1 ] || DOCKER_PULL_QUIET="--quiet"
-
-log "Pre-pulling the OBS container image (multi-GB, can take a while)..."
-sudo -u "$SERVICE_USER" docker pull $DOCKER_PULL_QUIET ghcr.io/streamwizard/obs-cloud-container:latest \
+step "Container images"
+run_pull "Pulling the OBS container image (multi-GB, can take a while)" \
+  sudo -u "$SERVICE_USER" docker pull ghcr.io/streamwizard/obs-cloud-container:latest \
   || warn "Pre-pull of the OBS image failed; it will be pulled on first instance creation instead."
 
-log "Pulling the obs-instance-manager image as $SERVICE_USER..."
 # docker-compose.yml hard-fails on a blank TAILSCALE_IP (the `:?` guard on
 # the port binding). A pull never binds anything, so give it a placeholder
-# via the shell environment (which takes precedence over .env for
-# interpolation) when the node hasn't joined Tailscale yet -- the real value
-# in .env is what `up` sees, and the gate below refuses to `up` without it.
-sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && TAILSCALE_IP=\"\${TAILSCALE_IP:-0.0.0.0}\" docker compose pull $DOCKER_PULL_QUIET"
+# via the environment (which takes precedence over .env for interpolation)
+# when the node hasn't joined Tailscale yet -- the real value in .env is
+# what `up` sees, and the gate below refuses to `up` without it.
+run_pull "Pulling the api + cadvisor images as $SERVICE_USER" \
+  sudo -u "$SERVICE_USER" env TAILSCALE_IP="${TAILSCALE_IP:-0.0.0.0}" docker compose --project-directory "$REPO_DIR" pull \
+  || die "docker compose pull failed."
 
+step "Start"
 # TAILSCALE_IP is in this list on purpose: docker-compose.yml binds the API
 # port to it, and Docker-published ports bypass ufw entirely -- so with a
 # blank value compose would publish the API on 0.0.0.0 and nothing on the

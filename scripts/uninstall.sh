@@ -111,6 +111,60 @@ log()  { echo "[streamwizard] [uninstall] $*"; }
 warn() { echo "[streamwizard] [uninstall] WARNING: $*" >&2; }
 die()  { echo "[streamwizard] [uninstall] ERROR: $*" >&2; exit 1; }
 
+# ── Progress helpers ─────────────────────────────────────────────────────────
+
+# Phase bar: one line per step so a reader (or someone tailing the resume
+# log) can tell at a glance how far the run is.
+STEP_TOTAL=13
+STEP_NUM=0
+step() {
+  STEP_NUM=$((STEP_NUM + 1))
+  local width=20 bar="" i filled
+  filled=$((STEP_NUM * width / STEP_TOTAL))
+  for ((i = 0; i < width; i++)); do
+    if [ "$i" -lt "$filled" ]; then bar="${bar}#"; else bar="${bar}-"; fi
+  done
+  echo
+  echo "[streamwizard] [uninstall] [$(printf '%2d' "$STEP_NUM")/$STEP_TOTAL] [$bar] $*"
+}
+
+# Runs a long command with a spinner, elapsed time and its last output line
+# on a terminal, or a plain "still going" line every 30s without one (the
+# resume log). Output is captured; the last 25 lines are shown on failure.
+run_with_spinner() {
+  local label="$1"; shift
+  local logf pid rc=0 start elapsed last spin='|/-\' i=0 last_logged=-1
+  logf="$(mktemp)"
+  "$@" >"$logf" 2>&1 &
+  pid=$!
+  start=$SECONDS
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$((SECONDS - start))
+    last="$(tail -n1 "$logf" 2>/dev/null | tr -d '\r' | cut -c1-60)"
+    if [ -t 1 ]; then
+      printf '\r\033[K[streamwizard] [uninstall] %s %s \xc2\xb7 %02d:%02d \xc2\xb7 %s' \
+        "${spin:i++%4:1}" "$label" $((elapsed / 60)) $((elapsed % 60)) "$last"
+      sleep 0.5
+    else
+      if [ $((elapsed / 30)) -ne "$last_logged" ]; then
+        last_logged=$((elapsed / 30))
+        log "$label ($((elapsed / 60))m$((elapsed % 60))s) $last"
+      fi
+      sleep 1
+    fi
+  done
+  wait "$pid" || rc=$?
+  [ -t 1 ] && printf '\r\033[K'
+  if [ "$rc" -ne 0 ]; then
+    warn "$label failed (exit $rc). Last output:"
+    tail -n 25 "$logf" >&2
+  else
+    log "$label: done in $(( (SECONDS - start) / 60 ))m$(( (SECONDS - start) % 60 ))s."
+  fi
+  rm -f "$logf"
+  return "$rc"
+}
+
 # Prints the header comment block (everything between the banner and
 # `set -euo pipefail`) so the help text can't drift from a hard-coded range.
 print_help() {
@@ -164,32 +218,40 @@ if [ "$SKIP_CONFIRM" != "true" ]; then
   esac
 fi
 
+step "Compose stack"
 if command -v docker >/dev/null; then
   if [ -f "$REPO_DIR/docker-compose.yml" ]; then
-    log "Stopping the compose stack..."
     # TAILSCALE_IP=0.0.0.0 only satisfies the compose file's `:?` guard so
     # `down` can parse it on a node that never joined Tailscale; nothing is
     # bound during a teardown.
-    sudo -u "$SERVICE_USER" bash -c "cd '$REPO_DIR' && TAILSCALE_IP=0.0.0.0 docker compose down -v" 2>/dev/null || warn "Could not bring the stack down cleanly (may already be stopped)."
+    run_with_spinner "Stopping the compose stack" \
+      sudo -u "$SERVICE_USER" env TAILSCALE_IP=0.0.0.0 docker compose --project-directory "$REPO_DIR" down -v \
+      || warn "Could not bring the stack down cleanly (may already be stopped)."
+  else
+    log "No compose file at $REPO_DIR; nothing to stop."
   fi
 
-  log "Removing obs-instance-manager / obs-cloud-container images and any leftover containers..."
+  step "Images (obs-instance-manager, obs-cloud-container, leftovers)"
   for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -iE 'obs-instance-manager|obs-cloud-container|obs-kiosk' || true); do
     docker rmi -f "$img" >/dev/null 2>&1 || true
   done
 
-  log "Removing the '$NETWORK_NAME' network..."
+  step "Docker network '$NETWORK_NAME'"
   docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
 else
   warn "Docker not found; skipping container/image/network cleanup."
+  step "Images (skipped: no Docker)"
+  step "Docker network (skipped: no Docker)"
 fi
 
+step "Data directories"
 if [ "$KEEP_DATA" != "true" ]; then
-  log "Removing /data/obs-configs and /data/obs-plugins..."
   rm -rf /data/obs-configs /data/obs-plugins
+else
+  log "Kept /data/obs-configs and /data/obs-plugins (--keep-data)."
 fi
 
-log "Removing $REPO_DIR..."
+step "Config directory, resume unit, docker.service drop-in"
 rm -rf "$REPO_DIR"
 
 # Leftover from an install that rebooted for the NVIDIA driver and never
@@ -208,13 +270,14 @@ if [ -f "$DOCKER_DROPIN" ]; then
   systemctl daemon-reload 2>/dev/null || true
 fi
 
+step "Service account '$SERVICE_USER'$([ "$KEEP_USER" = "true" ] && echo ' (kept, --keep-user)')"
 if [ "$KEEP_USER" != "true" ]; then
   if id "$SERVICE_USER" >/dev/null 2>&1; then
-    log "Removing service account '$SERVICE_USER'..."
     userdel -r "$SERVICE_USER" 2>/dev/null || warn "Could not fully remove '$SERVICE_USER' (processes may still be running as it)."
   fi
 fi
 
+step "Firewall$([ "$REMOVE_UFW_RULE" = "true" ] || [ "$DISABLE_UFW" = "true" ] || echo ' (skipped: no --remove-ufw-rule/--disable-ufw)')"
 if command -v ufw >/dev/null; then
   if [ "$REMOVE_UFW_RULE" = "true" ]; then
     log "Removing the ufw rule for tailscale0:$API_PORT/tcp..."
@@ -231,9 +294,9 @@ if command -v ufw >/dev/null; then
   fi
 fi
 
+step "NVIDIA container toolkit$([ "$PURGE_NVIDIA_TOOLKIT" = "true" ] || echo ' (skipped: no --purge-nvidia-toolkit)')"
 if [ "$PURGE_NVIDIA_TOOLKIT" = "true" ]; then
-  log "Purging nvidia-container-toolkit..."
-  apt-get purge -y nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1 >/dev/null 2>&1 || true
+  run_with_spinner "Purging nvidia-container-toolkit" apt-get purge -y nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1 || true
   rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
   DAEMON_JSON=/etc/docker/daemon.json
@@ -256,34 +319,35 @@ PY
   fi
 fi
 
+step "NVIDIA driver$([ "$PURGE_NVIDIA_DRIVER" = "true" ] || echo ' (skipped: no --purge-nvidia-driver)')"
 if [ "$PURGE_NVIDIA_DRIVER" = "true" ]; then
-  log "Purging the NVIDIA driver packages..."
   # apt treats an argument with regex characters as a pattern. Covers the
   # DKMS driver (nvidia-driver-*, libnvidia-*), Ubuntu's prebuilt signed
   # modules (linux-modules-nvidia-*, linux-objects-nvidia-*,
   # linux-signatures-nvidia-*) and the helper that picked them.
-  apt-get purge -y '^nvidia-driver-.*' '^nvidia-.*-[0-9]+.*' '^libnvidia-.*' '^linux-modules-nvidia-.*' '^linux-objects-nvidia-.*' '^linux-signatures-nvidia-.*' '^xserver-xorg-video-nvidia-.*' ubuntu-drivers-common >/dev/null 2>&1 || true
-  apt-get autoremove -y --purge >/dev/null 2>&1 || true
+  run_with_spinner "Purging the NVIDIA driver packages" apt-get purge -y '^nvidia-driver-.*' '^nvidia-.*-[0-9]+.*' '^libnvidia-.*' '^linux-modules-nvidia-.*' '^linux-objects-nvidia-.*' '^linux-signatures-nvidia-.*' '^xserver-xorg-video-nvidia-.*' ubuntu-drivers-common || true
+  run_with_spinner "Removing now-unused packages" apt-get autoremove -y --purge || true
   rm -f /etc/modprobe.d/nvidia*.conf
-  update-initramfs -u >/dev/null 2>&1 || true
+  run_with_spinner "Rebuilding the initramfs" update-initramfs -u || true
   warn "NVIDIA driver removed. Reboot before re-running install.sh so the kernel module is actually gone."
 fi
 
+step "Tailscale$([ "$PURGE_TAILSCALE" = "true" ] || echo ' (skipped: no --purge-tailscale)')"
 if [ "$PURGE_TAILSCALE" = "true" ]; then
-  log "Purging Tailscale..."
   command -v tailscale >/dev/null && tailscale down >/dev/null 2>&1 || true
-  apt-get purge -y tailscale >/dev/null 2>&1 || true
+  run_with_spinner "Purging Tailscale" apt-get purge -y tailscale || true
   rm -rf /var/lib/tailscale
   rm -f /etc/apt/sources.list.d/tailscale.list /usr/share/keyrings/tailscale-archive-keyring.gpg
 fi
 
+step "Docker engine$([ "$PURGE_DOCKER" = "true" ] || echo ' (skipped: no --purge-docker)')"
 if [ "$PURGE_DOCKER" = "true" ]; then
-  log "Purging Docker engine + containerd..."
-  apt-get purge -y docker-ce docker-ce-cli docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin docker-model-plugin containerd.io >/dev/null 2>&1 || true
+  run_with_spinner "Purging Docker engine + containerd" apt-get purge -y docker-ce docker-ce-cli docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin docker-model-plugin containerd.io || true
   rm -rf /var/lib/docker /var/lib/containerd /etc/docker
   rm -f /etc/apt/sources.list.d/docker.list /usr/share/keyrings/docker.gpg /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker.gpg
 fi
 
+step "DNS drop-in$([ "$REMOVE_DNS" = "true" ] || echo ' (skipped: no --remove-dns)')"
 if [ "$REMOVE_DNS" = "true" ]; then
   if [ -f "$DNS_DROPIN" ]; then
     log "Removing the Cloudflare DNS drop-in..."
@@ -294,6 +358,7 @@ if [ "$REMOVE_DNS" = "true" ]; then
   fi
 fi
 
+step "Static IP$([ "$REMOVE_STATIC_IP" = "true" ] || echo ' (kept: no --remove-static-ip)')"
 log "Done."
 
 # Last on purpose: if the address changes, the SSH session (and this script)
