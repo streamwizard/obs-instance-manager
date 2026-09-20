@@ -11,6 +11,7 @@ import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
 import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
+import { StreamKeyNotGrantedError } from "../services/twitch";
 import { proxyRoute } from "./instances";
 import { consumeTicket, issueTicket } from "../services/ws-tickets";
 import { KeyedRateLimiter } from "../utils/rate-limit";
@@ -200,6 +201,7 @@ admin.post("/instances/:id/start", async (c) => {
     const updated = await restartInstance(instance);
     return c.json(updated);
   } catch (err) {
+    if (err instanceof StreamKeyNotGrantedError) return c.json({ error: err.message, code: err.code }, 409);
     return c.json({ error: (err as Error).message }, 500);
   }
 });

@@ -32,7 +32,7 @@ import { debug, log } from "../utils/logger";
 import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
 import { syncPlugins } from "../services/plugins";
 import { encryptPassword, generateVncPassword } from "../utils/crypto";
-import { getStreamKey } from "../services/twitch";
+import { requireStreamKey, StreamKeyNotGrantedError } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
 import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
 import type { AppVariables, CreateInstanceBody } from "../types";
@@ -288,6 +288,16 @@ instances.post("/", async (c) => {
     return c.json({ error: "Node has reached max_instances capacity" }, 409);
   }
 
+  // Before any row or container exists: an instance that boots without the
+  // user's stream key is useless, so the dashboard sends them to Twitch first.
+  let streamKey: string | null;
+  try {
+    streamKey = await requireStreamKey(userId);
+  } catch (err) {
+    if (err instanceof StreamKeyNotGrantedError) return c.json({ error: err.message, code: err.code }, 409);
+    throw err;
+  }
+
   // Consumer NVIDIA drivers cap concurrent NVENC sessions (8 as of the 500+
   // driver series) independent of VRAM headroom -- Quadro/RTX-A cards have no
   // such cap, which is why this is a per-node config value (null = unlimited)
@@ -358,7 +368,6 @@ instances.post("/", async (c) => {
 
     await injectObsWsPassword(instanceId, obsWsPassword);
 
-    const streamKey = await getStreamKey(userId);
     if (streamKey) await injectStreamKey(instanceId, streamKey);
 
     containerId = await createContainer({
@@ -404,6 +413,7 @@ instances.post("/:id/start", async (c) => {
     const updated = await restartInstance(instance);
     return c.json(updated);
   } catch (err) {
+    if (err instanceof StreamKeyNotGrantedError) return c.json({ error: err.message, code: err.code }, 409);
     return c.json({ error: (err as Error).message }, 500);
   }
 });

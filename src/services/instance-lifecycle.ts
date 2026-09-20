@@ -12,7 +12,7 @@ import { debug, log } from "../utils/logger";
 import { withInstanceLock } from "../utils/instance-lock";
 import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "./obs-config";
 import { syncPlugins } from "./plugins";
-import { getStreamKey } from "./twitch";
+import { requireStreamKey } from "./twitch";
 import type { Instance } from "../types";
 
 export class InstanceLifecycleError extends Error {}
@@ -87,7 +87,10 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
 
   await injectObsWsPassword(instance.id, obsWsPassword);
 
-  const streamKey = await getStreamKey(instance.user_id);
+  // Throws StreamKeyNotGrantedError when the user has not connected Twitch;
+  // every caller (user start, admin start, auto-resume) already treats a
+  // throw here as a failed start.
+  const streamKey = await requireStreamKey(instance.user_id);
   if (streamKey) await injectStreamKey(instance.id, streamKey);
 
   let containerId: string | null = null;
