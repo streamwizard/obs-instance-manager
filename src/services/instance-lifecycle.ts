@@ -12,7 +12,7 @@ import { debug, log } from "../utils/logger";
 import { withInstanceLock } from "../utils/instance-lock";
 import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "./obs-config";
 import { syncPlugins } from "./plugins";
-import { getStreamKey } from "./twitch";
+import { requireStreamKey } from "./twitch";
 import type { Instance } from "../types";
 
 export class InstanceLifecycleError extends Error {}
@@ -77,6 +77,18 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
   const existing = await findContainerByName(instance.container_name);
   if (existing?.running) return adoptRunningContainer(instance, existing.id);
 
+  // Preconditions that refuse the start outright come before the "starting"
+  // broadcast and before anything touches S3 or the config dir: a refusal
+  // here leaves the instance exactly as it was, so other devices must not be
+  // told it's coming up (there'd be no terminal "error"/"stopped" to clear it).
+  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
+    throw new InstanceLifecycleError("Instance is missing OBS WebSocket password.");
+  }
+  // Throws StreamKeyNotGrantedError when the user has not connected Twitch;
+  // every caller (user start, admin start, auto-resume) already treats a
+  // throw here as a failed start.
+  const streamKey = await requireStreamKey(instance.user_id);
+
   // Leading-edge signal: the box is coming up. Lets other devices show
   // "Starting…" during the provisioning/boot wait instead of nothing.
   broadcastLifecycle(instance.user_id, instance.id, "starting");
@@ -106,9 +118,6 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
     ),
   ]);
 
-  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
-    throw new InstanceLifecycleError("Instance is missing OBS WebSocket password.");
-  }
   const obsWsPassword = decryptPassword(
     instance.obs_ws_password_ciphertext,
     instance.obs_ws_password_iv,
@@ -118,8 +127,6 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
   const vncPassword = await resolveVncPassword(instance);
 
   await injectObsWsPassword(instance.id, obsWsPassword);
-
-  const streamKey = await getStreamKey(instance.user_id);
   if (streamKey) await injectStreamKey(instance.id, streamKey);
 
   let containerId: string | null = null;

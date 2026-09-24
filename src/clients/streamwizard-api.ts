@@ -122,7 +122,23 @@ export async function apiGetSubscriptionLimits(subscriptionId: string): Promise<
   return res.data;
 }
 
-export async function apiGetStreamKey(userId: string): Promise<string | null> {
-  const res = await StreamwizardApi.get<{ key: string | null }>(`/api/nodes/users/${userId}/stream-key`);
-  return res.data.key;
+/**
+ * Mirrors StreamKeyReason in rest-api. `scope_missing` and `no_integration`
+ * mean the user has not granted the stream key on Twitch; `error` is a
+ * failure on rest-api's side. A rest-api that predates the field is read as
+ * granted-or-error from the key alone.
+ */
+export type StreamKeyReason = "granted" | "no_integration" | "scope_missing" | "error";
+
+export interface StreamKeyLookup {
+  key: string | null;
+  reason: StreamKeyReason;
+}
+
+export async function apiGetStreamKey(userId: string): Promise<StreamKeyLookup> {
+  const res = await StreamwizardApi.get<{ key: string | null; reason?: StreamKeyReason }>(
+    `/api/nodes/users/${userId}/stream-key`,
+  );
+  const { key, reason } = res.data;
+  return { key, reason: reason ?? (key ? "granted" : "error") };
 }
