@@ -288,16 +288,6 @@ instances.post("/", async (c) => {
     return c.json({ error: "Node has reached max_instances capacity" }, 409);
   }
 
-  // Before any row or container exists: an instance that boots without the
-  // user's stream key is useless, so the dashboard sends them to Twitch first.
-  let streamKey: string | null;
-  try {
-    streamKey = await requireStreamKey(userId);
-  } catch (err) {
-    if (err instanceof StreamKeyNotGrantedError) return c.json({ error: err.message, code: err.code }, 409);
-    throw err;
-  }
-
   // Consumer NVIDIA drivers cap concurrent NVENC sessions (8 as of the 500+
   // driver series) independent of VRAM headroom -- Quadro/RTX-A cards have no
   // such cap, which is why this is a per-node config value (null = unlimited)
@@ -344,6 +334,26 @@ instances.post("/", async (c) => {
     vnc_password_iv: encryptedVncPassword.iv,
     vnc_password_tag: encryptedVncPassword.tag,
   });
+
+  // After the row insert, not before: rest-api only releases a user's stream
+  // key to a node that already hosts an instance for them (403 otherwise), so
+  // a first-ever create has to exist as a row before the key can be looked up.
+  // A refusal (or a lookup failure) removes the row again so nothing is left
+  // behind in "creating" -- an instance that boots without the user's stream
+  // key is useless, so the dashboard sends them to Twitch first.
+  let streamKey: string | null;
+  try {
+    streamKey = await requireStreamKey(userId);
+  } catch (err) {
+    await deleteInstance(instanceId).catch((e) =>
+      log("warn", "failed to remove instance row after stream key refusal", {
+        instanceId,
+        error: (e as Error).message,
+      })
+    );
+    if (err instanceof StreamKeyNotGrantedError) return c.json({ error: err.message, code: err.code }, 409);
+    throw err;
+  }
 
   // Leading-edge signal for the fresh-launch flow (status "creating"): show
   // "Starting…" on every device while the container is provisioned.
