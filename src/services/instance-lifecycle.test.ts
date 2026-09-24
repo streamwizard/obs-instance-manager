@@ -72,9 +72,13 @@ mock.module("./obs-config", () => ({
 mock.module("./plugins", () => ({ syncPlugins: async () => {} }));
 // Both names so the stub matches main (getStreamKey) and the stream-key-scope
 // branch (requireStreamKey) without a rebase-time edit.
+let streamKeyError: Error | null = null;
 mock.module("./twitch", () => ({
   getStreamKey: async () => "live_key",
-  requireStreamKey: async () => "live_key",
+  requireStreamKey: async () => {
+    if (streamKeyError) throw streamKeyError;
+    return "live_key";
+  },
   StreamKeyNotGrantedError: class extends Error {},
 }));
 
@@ -107,6 +111,7 @@ beforeEach(() => {
   existing = null;
   probeQueue = [];
   createError = null;
+  streamKeyError = null;
   calls.createContainer = 0;
   calls.startContainer = 0;
   calls.removeContainer = [];
@@ -174,4 +179,23 @@ test("isInstanceLocked is true only while a start is in flight", async () => {
   // The lock map entry is cleared on a microtask after settle.
   await new Promise((r) => setTimeout(r, 0));
   expect(isInstanceLocked(instance.id)).toBe(false);
+});
+
+test("stream key refused: rethrows before any broadcast, config write or status change", async () => {
+  streamKeyError = new Error("Connect Twitch first");
+  await expect(restartInstance(instance)).rejects.toThrow("Connect Twitch first");
+  expect(calls.lifecycle).toEqual([]);
+  expect(calls.pullObsConfig).toBe(0);
+  expect(calls.injectObsWsPassword).toBe(0);
+  expect(calls.createContainer).toBe(0);
+  expect(calls.updates).toEqual([]);
+});
+
+test("missing websocket password: rethrows before any broadcast or side effect", async () => {
+  await expect(restartInstance({ ...instance, obs_ws_password_ciphertext: null })).rejects.toThrow(
+    "missing OBS WebSocket password"
+  );
+  expect(calls.lifecycle).toEqual([]);
+  expect(calls.pullObsConfig).toBe(0);
+  expect(calls.updates).toEqual([]);
 });
