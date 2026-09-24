@@ -6,7 +6,7 @@ import { getAllMetrics } from "../services/metrics";
 import { clearApiStopping, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
 import { broadcastLifecycle } from "../clients/ws-server";
 import { authMiddleware } from "../middleware/auth";
-import { withInstanceLock } from "../utils/instance-lock";
+import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
@@ -196,6 +196,7 @@ admin.post("/instances/:id/start", async (c) => {
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
+  if (isInstanceLocked(id)) return c.json({ error: "Instance operation already in progress" }, 409);
 
   try {
     const updated = await restartInstance(instance);

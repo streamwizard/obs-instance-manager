@@ -22,3 +22,11 @@ export function withInstanceLock<T>(instanceId: string, fn: () => Promise<T>): P
 
   return result;
 }
+
+// True while any locked operation for this instance is in flight or queued.
+// Lets the start routes answer 409 immediately instead of queueing a second
+// start behind the first: the queued one would run against a stale row after
+// the first already brought the container up.
+export function isInstanceLocked(instanceId: string): boolean {
+  return locks.has(instanceId);
+}
