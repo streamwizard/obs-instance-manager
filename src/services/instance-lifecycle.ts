@@ -4,7 +4,7 @@
 // handling in docker.ts) -- previously this logic was duplicated between
 // instances.ts and admin.ts, which had already drifted (admin.ts's copy was
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
-import { createContainer, removeContainer, startContainer } from "../clients/docker";
+import { createContainer, findContainerByName, removeContainer, startContainer } from "../clients/docker";
 import { updateInstance } from "../clients/supabase";
 import { broadcastLifecycle } from "../clients/ws-server";
 import { decryptPassword, encryptPassword, generateVncPassword } from "../utils/crypto";
@@ -54,10 +54,42 @@ export async function restartInstance(instance: Instance): Promise<Instance> {
   return withInstanceLock(instance.id, () => doRestartInstance(instance));
 }
 
+// Marks the instance running against a container that already exists for it.
+// Deliberately skips the config pull and password/stream-key injection: those
+// write into the container's bind-mounted config dir, and rewriting it under a
+// live OBS leaves the process on stale values (the obs-websocket password OBS
+// loaded at boot no longer matches what the DB and dashboard hold).
+async function adoptRunningContainer(instance: Instance, containerId: string): Promise<Instance> {
+  log("info", "container already running for instance, adopting instead of recreating", {
+    instanceId: instance.id,
+    containerId,
+  });
+  const updated = await updateInstance(instance.id, { container_id: containerId, status: "running" });
+  broadcastLifecycle(instance.user_id, instance.id, "started");
+  return updated;
+}
+
 async function doRestartInstance(instance: Instance): Promise<Instance> {
+  // Idempotency guard, checked before anything touches the config dir. The
+  // row passed in may be stale (a start that queued on the lock behind another
+  // start of the same instance), so Docker -- not the DB -- decides whether a
+  // container already exists for this name.
+  const existing = await findContainerByName(instance.container_name);
+  if (existing?.running) return adoptRunningContainer(instance, existing.id);
+
   // Leading-edge signal: the box is coming up. Lets other devices show
   // "Starting…" during the provisioning/boot wait instead of nothing.
   broadcastLifecycle(instance.user_id, instance.id, "starting");
+
+  if (existing) {
+    // Exited/dead leftover (crash mid-start, stop that never got to remove).
+    // Clear it so createContainer below doesn't fail on the name.
+    log("warn", "removing stale non-running container before start", {
+      instanceId: instance.id,
+      containerId: existing.id,
+    });
+    await removeContainer(existing.id);
+  }
 
   await Promise.all([
     pullObsConfig(instance.user_id, instance.id, instance.config_template ?? undefined).catch((e) =>
@@ -109,13 +141,29 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
     broadcastLifecycle(instance.user_id, instance.id, "started");
     return updated;
   } catch (err) {
-    await updateInstance(instance.id, { status: "error" });
-    broadcastLifecycle(instance.user_id, instance.id, "error");
+    log("error", "instance start failed", { instanceId: instance.id, error: (err as Error).message });
     if (containerId) {
       await removeContainer(containerId).catch((e) =>
         debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`)
       );
     }
+
+    // Never mark a live instance "error": if a container for this instance
+    // is running (ours was just removed above, so this is a different one
+    // that appeared alongside this attempt), the instance is healthy --
+    // report that instead of the failed create.
+    const survivor = await findContainerByName(instance.container_name).catch(() => null);
+    if (survivor?.running) {
+      log("warn", "start failed but a running container exists for instance, adopting it", {
+        instanceId: instance.id,
+        containerId: survivor.id,
+        error: (err as Error).message,
+      });
+      return adoptRunningContainer(instance, survivor.id);
+    }
+
+    await updateInstance(instance.id, { status: "error" });
+    broadcastLifecycle(instance.user_id, instance.id, "error");
     throw err;
   }
 }

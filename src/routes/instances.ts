@@ -25,7 +25,7 @@ import {
 } from "../clients/docker";
 import { broadcastLifecycle } from "../clients/ws-server";
 import { NODE_ID } from "../utils/node";
-import { withInstanceLock } from "../utils/instance-lock";
+import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
 import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
@@ -381,6 +381,7 @@ instances.post("/", async (c) => {
     broadcastLifecycle(userId, instanceId, "started");
     return c.json(updated, 201);
   } catch (err) {
+    log("error", "instance create failed", { instanceId, error: (err as Error).message });
     await updateInstance(instanceId, { status: "error" });
     broadcastLifecycle(userId, instanceId, "error");
     if (containerId) {
@@ -399,6 +400,9 @@ instances.post("/:id/start", async (c) => {
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
+  // A second start while the first is still provisioning must not queue: it
+  // would run against this (stale) row after the container is already up.
+  if (isInstanceLocked(id)) return c.json({ error: "Instance operation already in progress" }, 409);
 
   try {
     const updated = await restartInstance(instance);

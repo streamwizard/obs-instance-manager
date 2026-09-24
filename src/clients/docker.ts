@@ -287,6 +287,20 @@ export async function removeContainer(containerId: string): Promise<void> {
   await container.remove({ force: true });
 }
 
+// Exact-name lookup. Docker's `name` filter is a substring match and
+// container names come back with a leading "/", so both are normalised here.
+// Used by the start flow to adopt a container that already exists for this
+// instance (a previous start that finished after the caller gave up, or a
+// stale exited one) instead of racing Docker for the name and losing.
+export async function findContainerByName(
+  name: string
+): Promise<{ id: string; running: boolean } | null> {
+  const matches = await docker.listContainers({ all: true, filters: { name: [name] } });
+  const exact = matches.find((c) => (c.Names ?? []).some((n) => n.replace(/^\//, "") === name));
+  if (!exact) return null;
+  return { id: exact.Id, running: exact.State === "running" };
+}
+
 export type DockerStatus = "running" | "stopped" | "not_found" | "unknown";
 
 export async function getContainerStatus(containerId: string): Promise<DockerStatus> {
