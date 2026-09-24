@@ -70,7 +70,10 @@ mock.module("./obs-config", () => ({
   injectStreamKey: async () => {},
 }));
 mock.module("./plugins", () => ({ syncPlugins: async () => {} }));
+// Both names so the stub matches main (getStreamKey) and the stream-key-scope
+// branch (requireStreamKey) without a rebase-time edit.
 mock.module("./twitch", () => ({
+  getStreamKey: async () => "live_key",
   requireStreamKey: async () => "live_key",
   StreamKeyNotGrantedError: class extends Error {},
 }));
