@@ -1,6 +1,6 @@
 import Docker from "dockerode";
 import { debug, log } from "../utils/logger";
-import { PLUGINS_LOCAL_DIR } from "../services/plugins";
+import { buildContainerSpec, runtimeFromEnv } from "./instance-spec";
 import { getInstanceByIdAdmin, updateInstance, updateInstanceByContainerId } from "./supabase";
 import { refreshNodeInstances } from "../services/instance-cache";
 import { trackInstanceEvent } from "../services/influx-metrics";
@@ -66,16 +66,21 @@ export function clearApiStopping(containerId: string): void {
   apiStoppingContainers.delete(containerId);
 }
 
-const IMAGE = "ghcr.io/streamwizard/obs-cloud-container:latest";
+// Image, viewer (noVNC or Selkies) and GPU wiring for instance containers.
+// All default to production; see instance-spec.ts for the dev-box values.
+export const instanceRuntime = runtimeFromEnv();
 
 // Shared user-defined network joined by both the api container and every
 // instance container, so the api can reach instances by container name over
 // Docker's embedded DNS instead of publishing per-instance ports to the host.
 const NETWORK_NAME = process.env.OBS_NETWORK || "obs-net";
 
-export const VNC_PORT_INTERNAL = 5900;
-export const NOVNC_PORT_INTERNAL = 6080;
-export const OBS_WS_PORT_INTERNAL = 4455;
+export {
+  VNC_PORT_INTERNAL,
+  NOVNC_PORT_INTERNAL,
+  OBS_WS_PORT_INTERNAL,
+  SELKIES_PORT_INTERNAL,
+} from "./instance-spec";
 
 export { docker };
 
@@ -107,14 +112,6 @@ async function ensureImagePulled(image: string): Promise<void> {
     });
   }
 }
-
-// Named volume backing the shared gpu-xserver's X11 socket directory --
-// gpu-xserver itself is a plain static service in this repo's own
-// docker-compose.yml (one per machine/GPU, alongside `api`/`cadvisor`), not
-// something this API provisions at runtime. Read-only here since every
-// instance container only ever consumes that socket via VirtualGL, never
-// creates it.
-const GPU_XSOCKET_VOLUME = "gpu-x11-socket";
 
 export interface CreateContainerOptions {
   instanceId: string;
@@ -170,89 +167,27 @@ async function allocateCpuset(cpuQuota: number): Promise<string | undefined> {
 export async function createContainer(
   opts: CreateContainerOptions
 ): Promise<string> {
-  const { instanceId, containerName, resolution, obsWsPassword, vncPassword, memory_mb, cpu_quota, shm_size } = opts;
+  await ensureImagePulled(instanceRuntime.image);
 
-  await ensureImagePulled(IMAGE);
+  const cpusetCpus = await allocateCpuset(opts.cpu_quota);
 
-  const memoryBytes = memory_mb * 1024 * 1024;
-  const cpusetCpus = await allocateCpuset(cpu_quota);
-
-  const container = await docker.createContainer({
-    name: containerName,
-    Image: IMAGE,
-    Env: [
-      `RESOLUTION=${resolution}`,
-      `VNC_PORT=${VNC_PORT_INTERNAL}`,
-      `NOVNC_PORT=${NOVNC_PORT_INTERNAL}`,
-      `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
-      `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
-      `VNC_PASSWORD=${vncPassword}`,
-      // :10, not :0 -- :0 is reserved for the shared gpu-xserver's real
-      // Xorg (see docker-compose.yml); each instance's own Xvfb lives here.
-      `DISPLAY_NUM=:10`,
-      `OBS_BROWSER_EXTRA_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu`,
-    ],
-    HostConfig: {
-      Runtime: "nvidia",
-      ShmSize: parseShmSize(shm_size),
-      // SYS_ADMIN is required by OBS's browser-source plugin, which ships a
-      // setuid-root chrome-sandbox binary (standard Chromium sandboxing).
-      // NET_ADMIN and SYS_PTRACE are required because bwrap (entrypoint.sh)
-      // acquires its capability bundle via a single capset() call that fails
-      // entirely if any one of SYS_ADMIN/NET_ADMIN/SYS_PTRACE/SETUID/SETGID/
-      // SYS_CHROOT is missing from the container's capability set.
-      CapAdd: ["SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"],
-      // Docker's default AppArmor and seccomp profiles both block the
-      // userns/capset syscalls bwrap needs to jail OBS (entrypoint.sh),
-      // independent of CapAdd above. Unconfined here only relaxes MAC/syscall
-      // filtering inside this already-isolated container.
-      SecurityOpt: ["apparmor=unconfined", "seccomp=unconfined"],
-      // Pin swap to the memory limit so a container can't exceed it by swapping.
-      Memory: memoryBytes,
-      MemoryReservation: memoryBytes,
-      MemorySwap: memoryBytes,
-
-      NanoCpus: Math.round(cpu_quota * 1000000000),
-      // NanoCpus alone caps CPU *time* but leaves affinity at every host core,
-      // so OBS/Chromium/Qt size their thread pools for the whole node. Pinning
-      // the same core count the quota buys keeps nproc honest -- see
-      // allocateCpuset above.
-      ...(cpusetCpus ? { CpusetCpus: cpusetCpus } : {}),
-
-      Binds: [
-        `/data/obs-configs/${instanceId}/obs-studio:/home/app/.config/obs-studio`,
-        // Shared, read-only across all instances on this node — synced once via
-        // syncPlugins() instead of duplicating plugin binaries per instance.
-        `${PLUGINS_LOCAL_DIR}:/home/app/.config/obs-studio/plugins:ro`,
-        // Read-only: this instance only ever consumes the shared gpu-xserver's
-        // X11 socket (a static service in docker-compose.yml), never creates it.
-        `${GPU_XSOCKET_VOLUME}:/opt/gpu-xsocket:ro`,
-        // Persists whatever the user drops into OBS's media folder (Add
-        // Source > local files, etc.) across stop/start -- synced to S3
-        // alongside the obs-studio config, see obs-config.ts.
-        `/data/obs-configs/${instanceId}/media:/home/app/media`,
-      ],
-
-      DeviceRequests: [
-        {
-          Driver: "nvidia",
-          Count: -1,
-          // FIX: Wrap the strings in a nested array to satisfy the string[][] type definition
-          Capabilities: [["gpu", "utility", "video", "display"]],
-        },
-      ],
-    },
-    ExposedPorts: {
-      [`${VNC_PORT_INTERNAL}/tcp`]: {},
-      [`${NOVNC_PORT_INTERNAL}/tcp`]: {},
-      [`${OBS_WS_PORT_INTERNAL}/tcp`]: {},
-    },
-    NetworkingConfig: {
-      EndpointsConfig: {
-        [NETWORK_NAME]: {},
+  const container = await docker.createContainer(
+    buildContainerSpec(
+      {
+        instanceId: opts.instanceId,
+        containerName: opts.containerName,
+        resolution: opts.resolution,
+        obsWsPassword: opts.obsWsPassword,
+        vncPassword: opts.vncPassword,
+        memory_mb: opts.memory_mb,
+        cpu_quota: opts.cpu_quota,
+        shmBytes: parseShmSize(opts.shm_size),
+        networkName: NETWORK_NAME,
+        cpusetCpus,
       },
-    },
-  });
+      instanceRuntime,
+    ),
+  );
 
   return container.id;
 }

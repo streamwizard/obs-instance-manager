@@ -15,6 +15,7 @@ import {
   createContainer,
   clearApiStopping,
   getContainerStatus,
+  instanceRuntime,
   instanceTarget,
   markApiStopping,
   NOVNC_PORT_INTERNAL,
@@ -35,6 +36,7 @@ import { encryptPassword, generateVncPassword } from "../utils/crypto";
 import { requireStreamKey, StreamKeyNotGrantedError } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
 import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
+import { selkiesProxy } from "./selkies-proxy";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 // Upstream connect must complete within this window or the proxy gives up
@@ -68,6 +70,10 @@ const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
 // JWT check is skipped for them while every REST route still goes through it.
 instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 2000, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
 instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id, ticket) => getInstanceById(id, ticket.userId)));
+// Selkies viewer (HTTP + WS), gated by its own ticket-then-cookie session.
+const userSelkies = selkiesProxy((id, ticket) => getInstanceById(id, ticket.userId));
+instances.all("/:id/selkies", userSelkies);
+instances.all("/:id/selkies/*", userSelkies);
 
 instances.use("*", authMiddleware);
 
@@ -84,7 +90,7 @@ instances.post("/:id/ws-ticket", async (c) => {
 
   const body = await c.req.json<{ scope?: string }>().catch(() => ({}) as { scope?: string });
   const scope = body.scope;
-  if (scope !== "novnc" && scope !== "obsws") {
+  if (!isInstanceTicketScope(scope)) {
     return c.json({ error: "Invalid scope" }, 400);
   }
 
@@ -100,11 +106,19 @@ instances.post("/:id/ws-ticket", async (c) => {
   // and off the WS URL query string.
   if (scope === "novnc") {
     const vncPassword = await resolveVncPassword(instance);
-    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword });
+    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword, viewer: instanceRuntime.viewer });
   }
 
-  return c.json({ ticket, expires_in: 30 });
+  return c.json({ ticket, expires_in: 30, viewer: instanceRuntime.viewer });
 });
+
+// Which viewer tickets this node hands out: "selkies" only where instances
+// actually run Selkies, so a panel asking for it on a noVNC node gets a 400
+// and falls back. obsws works with either.
+export function isInstanceTicketScope(scope: unknown): scope is "novnc" | "obsws" | "selkies" {
+  if (scope === "obsws") return true;
+  return scope === instanceRuntime.viewer;
+}
 
 // Bridges a browser websocket connection to an instance container's internal
 // noVNC/obs-websocket port over the shared `obs-net` Docker network. Instance

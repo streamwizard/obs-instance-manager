@@ -23,6 +23,12 @@ export async function getStreamKey(userId: string): Promise<StreamKeyLookup> {
 export async function requireStreamKey(userId: string): Promise<string | null> {
   const lookup = await getStreamKey(userId);
   if (lookup.reason === "scope_missing" || lookup.reason === "no_integration") {
+    // Dev boxes: a local test user rarely has Twitch connected with the
+    // stream-key scope. Never set this on a real node.
+    if (process.env.ALLOW_MISSING_STREAM_KEY === "true") {
+      log("warn", "stream key not granted, booting without one (ALLOW_MISSING_STREAM_KEY)", { userId, reason: lookup.reason });
+      return null;
+    }
     throw new StreamKeyNotGrantedError();
   }
   if (lookup.reason === "error" || !lookup.key) {

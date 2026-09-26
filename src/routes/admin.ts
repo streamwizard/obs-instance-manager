@@ -3,7 +3,7 @@ import { Hono, type Context, type Next } from "hono";
 import { deleteInstance, getInstanceByIdAdmin, isAdmin, updateInstance } from "../clients/supabase";
 import { getCachedNodeInstances } from "../services/instance-cache";
 import { getAllMetrics } from "../services/metrics";
-import { clearApiStopping, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
+import { clearApiStopping, instanceRuntime, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
 import { broadcastLifecycle } from "../clients/ws-server";
 import { authMiddleware } from "../middleware/auth";
 import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
@@ -12,7 +12,8 @@ import { debug, log } from "../utils/logger";
 import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
 import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
 import { StreamKeyNotGrantedError } from "../services/twitch";
-import { proxyRoute } from "./instances";
+import { isInstanceTicketScope, proxyRoute } from "./instances";
+import { selkiesProxy } from "./selkies-proxy";
 import { consumeTicket, issueTicket } from "../services/ws-tickets";
 import { KeyedRateLimiter } from "../utils/rate-limit";
 import { STREAM_INTERVAL_MS } from "../utils/constants";
@@ -135,6 +136,9 @@ admin.get(
 
 admin.get("/instances/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, "novnc", (id) => getInstanceByIdAdmin(id)));
 admin.get("/instances/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id) => getInstanceByIdAdmin(id)));
+const adminSelkies = selkiesProxy((id) => getInstanceByIdAdmin(id));
+admin.all("/instances/:id/selkies", adminSelkies);
+admin.all("/instances/:id/selkies/*", adminSelkies);
 
 admin.use("*", authMiddleware, requireAdmin);
 
@@ -166,7 +170,7 @@ admin.post("/instances/:id/ws-ticket", async (c) => {
 
   const body = await c.req.json<{ scope?: string }>().catch(() => ({}) as { scope?: string });
   const scope = body.scope;
-  if (scope !== "novnc" && scope !== "obsws") {
+  if (!isInstanceTicketScope(scope)) {
     return c.json({ error: "Invalid scope" }, 400);
   }
 
@@ -180,10 +184,10 @@ admin.post("/instances/:id/ws-ticket", async (c) => {
   // with x11vnc itself, since the WS proxy is a blind byte relay.
   if (scope === "novnc") {
     const vncPassword = await resolveVncPassword(instance);
-    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword });
+    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword, viewer: instanceRuntime.viewer });
   }
 
-  return c.json({ ticket, expires_in: 30 });
+  return c.json({ ticket, expires_in: 30, viewer: instanceRuntime.viewer });
 });
 
 // Admin-scoped start/stop -- same docker actions as the end-user
