@@ -72,6 +72,10 @@ test("selkies + direct GPU: no VNC, no gpu-xserver, no bwrap privileges, WSL lib
   expect(env).toContain("OBS_GL_MODE=d3d12");
   expect(env).toContain("SELKIES_MANUAL_WIDTH=1280");
   expect(env).toContain("SELKIES_MANUAL_HEIGHT=720");
+  // Fixed viewer: no sidebar, no sharing links, no file transfer.
+  expect(env).toContain("SELKIES_UI_SHOW_SIDEBAR=false");
+  expect(env).toContain("SELKIES_ENABLE_SHARING=false");
+  expect(env).toContain("SELKIES_FILE_TRANSFERS=");
   // Overrides win over the defaults...
   expect(env).toContain("SELKIES_VIDEO_CRF=25");
   // ...except basic auth, which the proxy replaces.

@@ -87,10 +87,23 @@ function selkiesEnv(resolution: string, overrides: Record<string, string>): stri
   // Same settings the SW-202 evaluation settled on (obs-cloud-selkies'
   // docker-compose.yml). Basic auth is off because the container is only
   // reachable on obs-net, through this API's ticket-gated proxy.
+  //
+  // The viewer is a fixed product, not a remote-desktop toolbox: no sidebar
+  // or buttons, and the stream settings are locked ("|locked") so a value a
+  // browser remembered from an earlier session can't override them either.
+  // No sharing links, gamepads, microphone, webcam or file transfer; the
+  // clipboard stays, OBS users paste stream titles and URLs.
   const vars: Record<string, string> = {
-    SELKIES_ENCODER: "h264enc-striped",
-    SELKIES_FRAMERATE: "30-30",
-    SELKIES_VIDEO_CRF: "30",
+    SELKIES_ENCODER: "h264enc-striped|locked",
+    SELKIES_FRAMERATE: "30-30|locked",
+    SELKIES_VIDEO_CRF: "30|locked",
+    SELKIES_UI_SHOW_SIDEBAR: "false",
+    SELKIES_UI_SHOW_CORE_BUTTONS: "false",
+    SELKIES_ENABLE_SHARING: "false",
+    SELKIES_GAMEPAD_ENABLED: "false",
+    SELKIES_MICROPHONE_ENABLED: "false",
+    SELKIES_WEBCAM_ENABLED: "false",
+    SELKIES_FILE_TRANSFERS: "",
     SELKIES_AUDIO_DEVICE_NAME: "obs_sink.monitor",
     SELKIES_AUDIO_REDUNDANCY: "true",
     // Xvfb cannot add RANDR modes, so the client must not resize the desktop.
