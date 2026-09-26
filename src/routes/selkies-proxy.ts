@@ -49,6 +49,10 @@ const FORWARD_REQUEST_HEADERS = [
 
 const HOP_BY_HOP = ["connection", "keep-alive", "transfer-encoding", "upgrade", "set-cookie"];
 
+const STARTING_PAGE = `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="2">
+<title>Starting</title><body style="margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#fffa;font:14px system-ui">
+OBS is starting&hellip;</body>`;
+
 type GetInstance = (id: string, ticket: Ticket) => Promise<{ container_name: string } | null>;
 
 // "/instances/<id>/selkies/assets/x.js" -> { base: "/instances/<id>/selkies", rest: "/assets/x.js" }
@@ -150,6 +154,10 @@ async function forwardHttp(c: Context, session: SelkiesSession, base: string, re
     } as RequestInit);
   } catch (err) {
     debug("http", `selkies upstream ${target} unreachable`, (err as Error).message);
+    // The panel opens the viewer as soon as the instance row says running,
+    // which is before Selkies inside it listens. The page is what lands in
+    // the iframe, so keep retrying there instead of showing a raw 502.
+    if (rest === "/") return c.html(STARTING_PAGE, 503, { "Retry-After": "2" });
     return c.json({ error: "Viewer not reachable (instance starting or stopped?)" }, 502);
   }
 
