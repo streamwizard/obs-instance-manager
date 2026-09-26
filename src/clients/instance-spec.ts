@@ -89,14 +89,18 @@ function selkiesEnv(resolution: string, overrides: Record<string, string>): stri
   // reachable on obs-net, through this API's ticket-gated proxy.
   //
   // The viewer is a fixed product, not a remote-desktop toolbox: no sidebar
-  // or buttons, and the stream settings are locked ("|locked") so a value a
+  // or buttons, and the stream settings are locked so a value a
   // browser remembered from an earlier session can't override them either.
+  // Selkies' lock syntax differs by type: one list item locks an enum, a
+  // degenerate "a-a" range locks a number, "|locked" is for booleans only.
+  // Anything else is logged as unparseable and silently replaced by the
+  // built-in default.
   // No sharing links, gamepads, microphone, webcam or file transfer; the
   // clipboard stays, OBS users paste stream titles and URLs.
   const vars: Record<string, string> = {
-    SELKIES_ENCODER: "h264enc-striped|locked",
-    SELKIES_FRAMERATE: "30-30|locked",
-    SELKIES_VIDEO_CRF: "30|locked",
+    SELKIES_ENCODER: "h264enc-striped",
+    SELKIES_FRAMERATE: "30-30",
+    SELKIES_VIDEO_CRF: "30-30",
     SELKIES_UI_SHOW_SIDEBAR: "false",
     SELKIES_UI_SHOW_CORE_BUTTONS: "false",
     SELKIES_ENABLE_SHARING: "false",

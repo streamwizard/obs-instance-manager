@@ -76,6 +76,11 @@ test("selkies + direct GPU: no VNC, no gpu-xserver, no bwrap privileges, WSL lib
   expect(env).toContain("SELKIES_UI_SHOW_SIDEBAR=false");
   expect(env).toContain("SELKIES_ENABLE_SHARING=false");
   expect(env).toContain("SELKIES_FILE_TRANSFERS=");
+  // Locks in the syntax Selkies parses; "|locked" on a range or list is
+  // rejected and replaced by the default.
+  expect(env).toContain("SELKIES_ENCODER=h264enc-striped");
+  expect(env).toContain("SELKIES_FRAMERATE=30-30");
+  expect(env.filter((e) => /^SELKIES_(ENCODER|FRAMERATE|VIDEO_CRF)=.*\|locked/.test(e))).toEqual([]);
   // Overrides win over the defaults...
   expect(env).toContain("SELKIES_VIDEO_CRF=25");
   // ...except basic auth, which the proxy replaces.
