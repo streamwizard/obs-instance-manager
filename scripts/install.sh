@@ -847,12 +847,11 @@ with open(env_path, "w") as f:
     # rest-api only includes these when it has InfluxDB configured for this
     # environment, so fall back to blank rather than KeyError-ing a node that
     # was claimed before Influx was wired up. src/clients/influx.ts needs all
-    # four non-empty and disables metrics otherwise, so blanks are the correct
+    # three non-empty and disables metrics otherwise, so blanks are the correct
     # "no metrics sink" signal.
     f.write(f"INFLUXDB_URL={data.get('INFLUXDB_URL') or ''}\n")
     f.write(f"INFLUXDB_TOKEN={data.get('INFLUXDB_TOKEN') or ''}\n")
     f.write(f"INFLUXDB_ORG={data.get('INFLUXDB_ORG') or ''}\n")
-    f.write(f"INFLUXDB_BUCKET={data.get('INFLUXDB_BUCKET') or ''}\n")
     # rest-api only includes these when both are configured -- fall back to
     # blank so the node still installs, it just won't push lifecycle events to
     # browsers (src/clients/ws-server.ts skips the broadcast when unset).
