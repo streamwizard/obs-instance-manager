@@ -9,7 +9,7 @@ import { authMiddleware } from "../middleware/auth";
 import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pushObsConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
+import { persistAndRemoveLocalConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
 import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
 import { StreamKeyNotGrantedError } from "../services/twitch";
 import { proxyRoute } from "./instances";
@@ -222,19 +222,7 @@ admin.post("/instances/:id/stop", async (c) => {
     try {
       await stopContainer(containerId);
 
-      await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-        log("warn", "obs config push failed after stop", {
-          instanceId: instance.id,
-          error: (e as Error).message,
-        })
-      );
-
-      await removeLocalConfig(instance.id).catch((e) =>
-        log("warn", "failed to remove local config dir after stop", {
-          instanceId: instance.id,
-          error: (e as Error).message,
-        })
-      );
+      await persistAndRemoveLocalConfig(instance.user_id, instance.id);
 
       await removeContainer(containerId).catch((e) =>
         debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
@@ -266,13 +254,7 @@ admin.delete("/instances/:id", async (c) => {
           debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
         );
 
-        await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-          log("warn", "obs config push failed before delete", {
-            instanceId: instance.id,
-            error: (e as Error).message,
-          })
-        );
-
+        // No push: the S3 prefix is removed right below.
         await removeLocalConfig(instance.id).catch((e) =>
           log("warn", "failed to remove local config dir before delete", {
             instanceId: instance.id,

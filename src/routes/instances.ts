@@ -29,7 +29,7 @@ import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
 import { KeyedRateLimiter, MessageRateLimiter } from "../utils/rate-limit";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
-import { pullObsConfig, pushObsConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
+import { pullObsConfig, persistAndRemoveLocalConfig, removeLocalConfig, removeS3Config, injectStreamKey, clearStreamKey, injectObsWsPassword } from "../services/obs-config";
 import { syncPlugins } from "../services/plugins";
 import { encryptPassword, generateVncPassword } from "../utils/crypto";
 import { requireStreamKey, StreamKeyNotGrantedError } from "../services/twitch";
@@ -454,19 +454,7 @@ instances.post("/:id/stop", async (c) => {
         log("warn", "failed to clear stream key before push", { instanceId: instance.id, error: (e as Error).message })
       );
 
-      await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-        log("warn", "obs config push failed after stop", {
-          instanceId: instance.id,
-          error: (e as Error).message,
-        })
-      );
-
-      await removeLocalConfig(instance.id).catch((e) =>
-        log("warn", "failed to remove local config dir after stop", {
-          instanceId: instance.id,
-          error: (e as Error).message,
-        })
-      );
+      await persistAndRemoveLocalConfig(instance.user_id, instance.id);
 
       await removeContainer(containerId).catch((e) =>
         debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
@@ -499,17 +487,7 @@ instances.delete("/:id", async (c) => {
           debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
         );
 
-        await clearStreamKey(instance.id).catch((e) =>
-          log("warn", "failed to clear stream key before delete push", { instanceId: instance.id, error: (e as Error).message })
-        );
-
-        await pushObsConfig(instance.user_id, instance.id).catch((e) =>
-          log("warn", "obs config push failed before delete", {
-            instanceId: instance.id,
-            error: (e as Error).message,
-          })
-        );
-
+        // No push: the S3 prefix is removed right below.
         await removeLocalConfig(instance.id).catch((e) =>
           log("warn", "failed to remove local config dir before delete", {
             instanceId: instance.id,
