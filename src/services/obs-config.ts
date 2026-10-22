@@ -15,6 +15,8 @@ const DEFAULT_TEMPLATE = process.env.OBS_DEFAULT_TEMPLATE ?? "default";
 // Push retries before a stop gives up and keeps the local dir for next start.
 const PUSH_ATTEMPTS = 3;
 
+const MAX_KEY_BYTES = 1024;
+
 function templatePrefix(template: string): string {
   return `${TEMPLATES_BASE}${template}/`;
 }
@@ -179,7 +181,16 @@ async function syncSection(opts: SyncSectionOptions): Promise<SyncStats> {
   if (files === null) return stats;
 
   const { entries } = opts;
-  const wanted = files.filter((f) => opts.filter(f.rel));
+  const wanted = files.filter((f) => {
+    if (!opts.filter(f.rel)) return false;
+    // S3 rejects keys over 1024 bytes. Such a file would fail every push and
+    // keep the instance on its leftover dir forever, so skip it instead.
+    if (Buffer.byteLength(`${opts.prefix}${f.rel}`) > MAX_KEY_BYTES) {
+      log("warn", "skipping file with a path too long for S3", { prefix: opts.prefix, path: f.rel.slice(0, 200) });
+      return false;
+    }
+    return true;
+  });
 
   await mapLimit(wanted, S3_SYNC_CONCURRENCY, async (f) => {
     const prev = entries[f.rel];
@@ -365,6 +376,22 @@ function splitByPolicy(keys: string[], prefix: string, filter: (rel: string) => 
   return { keep, junk };
 }
 
+// Replaces the local basic/profiles/ with the template's. Wipes first, so if
+// S3 is down the instance boots without a profile (OBS creates a default)
+// rather than with a user-edited one.
+async function applyTemplateProfile(instanceId: string, template: string): Promise<void> {
+  const localBase = localConfigDir(instanceId);
+  await rm(join(localBase, "basic", "profiles"), { recursive: true, force: true });
+  const tPrefix = templatePrefix(template);
+  const keys = (await listObjects(`${tPrefix}basic/profiles/`)).map((o) => o.key);
+  await downloadPrefix(keys, tPrefix, localBase, {
+    entries: {},
+    source: "template",
+    hashContent: false,
+    filter: () => false,
+  });
+}
+
 // Downloads the user's OBS config from S3 into the instance's local bind-mount
 // directory. Always applies the named template as a base layer first so shared
 // assets (default scenes, the plan's profile, etc.) reach every instance
@@ -384,6 +411,14 @@ export async function pullObsConfig(userId: string, instanceId: string, template
         instanceId,
         error: (e as Error).message,
       });
+      // The profile is still plan-owned: never start from one the user may
+      // have edited in the last run.
+      await applyTemplateProfile(instanceId, template).catch((err) =>
+        log("warn", "could not re-apply template profile to leftover config", {
+          instanceId,
+          error: (err as Error).message,
+        })
+      );
       return;
     }
   }
