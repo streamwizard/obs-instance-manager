@@ -7,20 +7,18 @@ import { trackInstanceEvent } from "../services/influx-metrics";
 import { StreamwizardApi } from "./streamwizard-api";
 import { broadcastLifecycle } from "./ws-server";
 import { parseCpuset, pickLeastUsedCores } from "../utils/cpuset";
+import { withInstanceLock } from "../utils/instance-lock";
 import type { Instance, InstanceStatus } from "../types";
 
 // Imported lazily to avoid a circular dependency (obs-config imports s3, s3
 // imports logger, docker imports supabase — all fine, but obs-config also
-// uses docker indirectly via routes). Calling these at event-time is safe.
-let _pushObsConfig: ((userId: string, instanceId: string) => Promise<void>) | null = null;
-let _removeLocalConfig: ((instanceId: string) => Promise<void>) | null = null;
+// uses docker indirectly via routes). Calling this at event-time is safe.
+let _persistLocalConfig: ((userId: string, instanceId: string) => Promise<boolean>) | null = null;
 
 export function registerConfigHandlers(
-  push: (userId: string, instanceId: string) => Promise<void>,
-  remove: (instanceId: string) => Promise<void>
+  persist: (userId: string, instanceId: string) => Promise<boolean>
 ): void {
-  _pushObsConfig = push;
-  _removeLocalConfig = remove;
+  _persistLocalConfig = persist;
 }
 
 // Same lazy-registration trick as registerConfigHandlers above, for the same
@@ -608,16 +606,20 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
   // Push config to S3 for containers that died out-of-band (not via the
   // /stop route, which handles this itself). If container_id was already
   // null the record wasn't found above, so this only runs for genuine
-  // out-of-band exits.
-  if (_pushObsConfig && _removeLocalConfig) {
-    await _pushObsConfig(updated.user_id, updated.id).catch((e) =>
+  // out-of-band exits. Locked so it can't interleave with an autosave or a
+  // start; a start that ran first (auto-resume, user) already owns the dir
+  // again, so skip if the instance has a container by the time we get in.
+  const persist = _persistLocalConfig;
+  if (persist) {
+    await withInstanceLock(updated.id, async () => {
+      const current = await getInstanceByIdAdmin(updated.id);
+      if (current?.container_id) {
+        debug("docker", `skipping config push after exit for ${updated.id}, it was restarted`);
+        return;
+      }
+      await persist(updated.user_id, updated.id);
+    }).catch((e) =>
       log("warn", "obs config push failed after out-of-band container exit", {
-        instanceId: updated.id,
-        error: (e as Error).message,
-      })
-    );
-    await _removeLocalConfig(updated.id).catch((e) =>
-      log("warn", "failed to remove local config dir after out-of-band exit", {
         instanceId: updated.id,
         error: (e as Error).message,
       })
