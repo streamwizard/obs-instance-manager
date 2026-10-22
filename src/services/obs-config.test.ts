@@ -233,6 +233,20 @@ describe("pullObsConfig", () => {
     expect(text(`${OVERLAY}basic/scenes/Main.json`)).toBe("newer");
     expect(await Bun.file(join(cfgDir, "basic/scenes/Main.json")).text()).toBe("newer");
   });
+
+  test("keeps a leftover dir it can't push, but still re-applies the template profile", async () => {
+    bucket.set(`${TEMPLATE}basic/profiles/StreamWizard/basic.ini`, enc("[Video] plan"));
+    bucket.set(`${OVERLAY}basic/scenes/Main.json`, enc("old"));
+    await writeLocal(join(cfgDir, "basic/scenes/Main.json"), "newer");
+    await writeLocal(join(cfgDir, "basic/profiles/StreamWizard/basic.ini"), "[Video] edited");
+    await writeLocal(join(cfgDir, "basic/profiles/Other/basic.ini"), "[Video] extra");
+    failPut = () => true;
+
+    await pullObsConfig(USER, ID);
+    expect(await Bun.file(join(cfgDir, "basic/scenes/Main.json")).text()).toBe("newer");
+    expect(await Bun.file(join(cfgDir, "basic/profiles/StreamWizard/basic.ini")).text()).toBe("[Video] plan");
+    expect(await Bun.file(join(cfgDir, "basic/profiles/Other/basic.ini")).exists()).toBe(false);
+  });
 });
 
 describe("single media files", () => {
