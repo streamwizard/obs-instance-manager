@@ -18,6 +18,11 @@ export const OBS_MEDIA_QUOTA_MB_FALLBACK = Number(process.env.OBS_MEDIA_QUOTA_MB
 // that loss window for running instances.
 export const CONFIG_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 
+// Parallel S3 requests per sync (one instance's push/pull, or the plugin
+// mirror), and how many instances one autosave pass pushes at once.
+export const S3_SYNC_CONCURRENCY = 8;
+export const AUTOSAVE_INSTANCE_CONCURRENCY = 2;
+
 // Backstop cadence for services/obs-event-listener.ts. The docker event stream
 // attaches/detaches scene listeners live; this bounds how long a missed event
 // (dropped stream, out-of-band status change) can leave an instance unwatched.

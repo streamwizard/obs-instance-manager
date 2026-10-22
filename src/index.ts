@@ -9,11 +9,13 @@ import { websocket } from "./utils/ws";
 import { debug, log } from "./utils/logger";
 import { reconcileContainers, registerConfigHandlers, registerInstanceLifecycleHandlers, registerObsEventHandlers, startEventListener } from "./clients/docker";
 import { getCachedNodeInstances } from "./services/instance-cache";
-import { pushObsConfig, removeLocalConfig } from "./services/obs-config";
+import { persistAndRemoveLocalConfig, pushObsConfig } from "./services/obs-config";
+import { isInstanceLocked, withInstanceLock } from "./utils/instance-lock";
+import { mapLimit } from "./utils/concurrency";
 import { restartInstance } from "./services/instance-lifecycle";
 import { checkS3 } from "./clients/s3";
 import { NODE_ID } from "./utils/node";
-import { CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES, OBS_EVENT_RESYNC_INTERVAL_MS } from "./utils/constants";
+import { AUTOSAVE_INSTANCE_CONCURRENCY, CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES, OBS_EVENT_RESYNC_INTERVAL_MS } from "./utils/constants";
 import { startMetricsPersistence } from "./services/metrics-persist";
 import { loadCommandKeyHash, startCommandKeyRefresh } from "./services/command-key";
 import { attachInstance, detachAll, detachInstance, syncInstances } from "./services/obs-event-listener";
@@ -88,7 +90,7 @@ const port = Number(process.env.PORT) || 3000;
 
 await checkS3();
 
-registerConfigHandlers(pushObsConfig, removeLocalConfig);
+registerConfigHandlers(persistAndRemoveLocalConfig);
 registerInstanceLifecycleHandlers(restartInstance);
 registerObsEventHandlers(attachInstance, detachInstance);
 
@@ -133,22 +135,32 @@ setInterval(() => {
   );
 }, CONFIG_AUTOSAVE_INTERVAL_MS);
 
+// Each push takes the instance lock so it can't land an older upload after a
+// stop's final push, or resurrect a media file a route just deleted. An
+// instance that's already locked (stopping, starting, mid media op) is skipped
+// rather than queued: its own operation pushes, and a queued autosave would
+// run against a dir the stop already removed.
 async function autosaveRunningInstanceConfigs(): Promise<void> {
   const nodeInstances = await getCachedNodeInstances();
   const running = nodeInstances.filter((i) => i.status === "running" && i.container_id);
 
-  await Promise.all(
-    running.map((instance) =>
-      pushObsConfig(instance.user_id, instance.id).catch((e) =>
+  let pushed = 0;
+  await mapLimit(running, AUTOSAVE_INSTANCE_CONCURRENCY, async (instance) => {
+    if (isInstanceLocked(instance.id)) {
+      debug("autosave", `skipping ${instance.id}, another operation holds its lock`);
+      return;
+    }
+    await withInstanceLock(instance.id, () => pushObsConfig(instance.user_id, instance.id, { deletes: false }))
+      .then(() => pushed++)
+      .catch((e) =>
         log("warn", "config autosave push failed", {
           instanceId: instance.id,
           error: (e as Error).message,
         }),
-      ),
-    ),
-  );
+      );
+  });
 
-  debug("autosave", `pushed config for ${running.length} running instance(s)`);
+  debug("autosave", `checked config for ${pushed}/${running.length} running instance(s)`);
 }
 
 const server = Bun.serve({

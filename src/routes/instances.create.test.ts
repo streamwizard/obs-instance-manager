@@ -88,6 +88,7 @@ mock.module("../clients/ws-server", () => ({
 mock.module("../services/obs-config", () => ({
   pullObsConfig: async () => {},
   pushObsConfig: async () => {},
+  persistAndRemoveLocalConfig: async () => true,
   removeLocalConfig: async () => {},
   removeS3Config: async () => {},
   injectStreamKey: async () => {},

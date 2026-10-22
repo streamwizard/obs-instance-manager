@@ -1,17 +1,17 @@
 // User media file-manager for a running instance's /home/app/media mount.
 //
 // All operations are scoped to localMediaDir(instanceId) -- the same host dir
-// that docker.ts bind-mounts to /home/app/media and that obs-config.ts's
-// pushObsMedia/pullObsMedia sync to S3. This service only ever touches files
+// that docker.ts bind-mounts to /home/app/media and that obs-config.ts syncs
+// to S3. Each mutation syncs just its own key. This service only ever touches files
 // while the instance is running (the caller guards on status); on stop the
 // existing lifecycle pushes to S3 and removes the local dir.
 //
 // Every mutation runs under withInstanceLock so an upload/rename/delete can
-// never interleave with a stop's pushObsMedia + removeLocalConfig, which would
+// never interleave with a stop's final push + removeLocalConfig, which would
 // otherwise write into (or read from) a half-deleted tree.
 import { chown, lstat, mkdir, readdir, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
-import { deleteObsMediaFile, localMediaDir, pushObsMedia } from "./obs-config";
+import { deleteObsMediaFile, localMediaDir, moveObsMediaFile, pushObsMediaFile } from "./obs-config";
 import { updateInstance } from "../clients/supabase";
 import { withInstanceLock } from "../utils/instance-lock";
 import { OBS_MEDIA_MAX_FILE_BYTES } from "../utils/constants";
@@ -265,7 +265,7 @@ export async function uploadFile(
       debug("media", `chown failed for ${abs}: ${(e as Error).message}`),
     );
 
-    await pushObsMedia(instance.user_id, instance.id).catch((e) =>
+    await pushObsMediaFile(instance.user_id, instance.id, toRel(base, abs)).catch((e) =>
       log("warn", "media push to S3 failed after upload", { instanceId: instance.id, error: (e as Error).message }),
     );
 
@@ -305,13 +305,10 @@ export async function renameFile(
     await mkdir(dirname(toAbs), { recursive: true });
     await rename(fromAbs, toAbs);
 
-    // Push the new name, then drop the old key from S3 so a restart's
-    // pullObsMedia doesn't resurrect the pre-rename file.
-    await pushObsMedia(instance.user_id, instance.id).catch((e) =>
-      log("warn", "media push to S3 failed after rename", { instanceId: instance.id, error: (e as Error).message }),
-    );
-    await deleteObsMediaFile(instance.user_id, instance.id, toRel(base, fromAbs)).catch((e) =>
-      log("warn", "stale S3 media key delete failed after rename", { instanceId: instance.id, error: (e as Error).message }),
+    // Move the S3 key too, so a restart's pull doesn't resurrect the
+    // pre-rename file.
+    await moveObsMediaFile(instance.user_id, instance.id, toRel(base, fromAbs), toRel(base, toAbs)).catch((e) =>
+      log("warn", "S3 media move failed after rename", { instanceId: instance.id, error: (e as Error).message }),
     );
 
     log("info", "media file renamed", { instanceId: instance.id, from: fromPath, to: toPath });
@@ -335,8 +332,8 @@ export async function deleteFile(
     // target is a real file, so this rm cannot traverse a symlink out of base.
     await rm(abs, { force: true });
 
-    // pushObsMedia is additive-only, so we must delete the specific S3 key too,
-    // otherwise pullObsMedia would restore the file on the next start.
+    // Delete the S3 key now rather than waiting for the next full push, so a
+    // crash before then can't restore the file on the next start.
     await deleteObsMediaFile(instance.user_id, instance.id, rel).catch((e) =>
       log("warn", "S3 media key delete failed after delete", { instanceId: instance.id, error: (e as Error).message }),
     );
