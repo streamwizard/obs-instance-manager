@@ -2,6 +2,7 @@ import type { Context, Next } from "hono";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { AppVariables } from "../types";
 import { debug } from "../utils/logger";
+import { isNodeToken, verifyNodeToken } from "../services/node-token";
 
 const supabaseUrl = process.env.SUPABASE_URL;
 
@@ -17,9 +18,18 @@ if (!supabaseUrl) {
 // RS256/ES256, so there's no need for a separate jsonwebtoken dependency.
 const jwks = createRemoteJWKSet(new URL("/auth/v1/.well-known/jwks.json", supabaseUrl));
 
-// JWT only ever arrives in the Authorization header. WebSocket upgrades (which
-// can't set headers) authenticate with single-use ws-tickets instead -- see
-// services/ws-tickets.ts -- so there's deliberately no query-param token path.
+// Two credentials are accepted while the web apps switch over (SW-481):
+//
+//   - a node token (services/node-token.ts): 60 seconds, bound to this node,
+//     one scope and usually one instance. Routes check the scope with
+//     requireScope (middleware/scope.ts).
+//   - LEGACY: the caller's Supabase session JWT, verified below. It carries no
+//     scope, so requireScope lets it through. Remove this path once both web
+//     apps send node tokens everywhere; until then, nothing else changes for it.
+//
+// Either one only ever arrives in the Authorization header. WebSocket upgrades
+// (which can't set headers) authenticate with single-use ws-tickets instead --
+// see services/ws-tickets.ts -- so there's deliberately no query-param token path.
 function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
   const header = c.req.header("Authorization");
   if (header?.startsWith("Bearer ")) {
@@ -40,6 +50,20 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
     return c.json({ error: "Missing authentication token" }, 401);
   }
 
+  if (isNodeToken(token)) {
+    try {
+      const claims = await verifyNodeToken(token);
+      debug("auth", `verified node token for sub=${claims.userId} scope=${claims.scope} on ${c.req.path}`);
+      c.set("userId", claims.userId);
+      c.set("nodeToken", claims);
+    } catch (err) {
+      debug("auth", `node token rejected on ${c.req.path}`, err instanceof Error ? err.message : err);
+      return c.json({ error: "Invalid or expired token" }, 401);
+    }
+    await next();
+    return;
+  }
+
   let userId: string;
   try {
     const payload = await verifyToken(token);
@@ -47,7 +71,7 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
       debug("auth", `token missing sub on ${c.req.path}`, payload);
       return c.json({ error: "Invalid token payload" }, 401);
     }
-    debug("auth", `verified token for sub=${payload.sub} iss=${payload.iss} on ${c.req.path}`);
+    debug("auth", `verified legacy session JWT for sub=${payload.sub} iss=${payload.iss} on ${c.req.path}`);
     userId = payload.sub;
   } catch (err) {
     debug("auth", `jwt verify failed on ${c.req.path}`, err instanceof Error ? err.message : err);
@@ -55,5 +79,6 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
   }
 
   c.set("userId", userId);
+  c.set("nodeToken", null);
   await next();
 }

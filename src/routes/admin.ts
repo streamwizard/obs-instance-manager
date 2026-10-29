@@ -6,6 +6,7 @@ import { getAllMetrics } from "../services/metrics";
 import { clearApiStopping, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
 import { broadcastLifecycle } from "../clients/ws-server";
 import { authMiddleware } from "../middleware/auth";
+import { requireScope } from "../middleware/scope";
 import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
@@ -50,11 +51,17 @@ export function notifyMetricsDrain(reconnectUrl: string) {
   }
 }
 
-// Same JWT auth every end-user route uses (authMiddleware) -- the only
+// Same auth every end-user route uses (authMiddleware) -- the only
 // difference here is the authorization check is "has the admin role"
-// instead of "owns this instance".
+// instead of "owns this instance". A node token must also say role "admin",
+// which only web-admin signs, after its own strong-session check.
 async function requireAdmin(c: Context<{ Variables: AppVariables }>, next: Next) {
   const userId = c.get("userId");
+  const nodeToken = c.get("nodeToken");
+  if (nodeToken && nodeToken.role !== "admin") {
+    debug("auth", `node token for ${userId} is not an admin token, rejecting ${c.req.path}`);
+    return c.json({ error: "Forbidden" }, 403);
+  }
   if (!(await isAdmin(userId))) {
     debug("auth", `user ${userId} is not an admin, rejecting ${c.req.path}`);
     return c.json({ error: "Forbidden" }, 403);
@@ -139,9 +146,9 @@ admin.get("/instances/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", 
 admin.use("*", authMiddleware, requireAdmin);
 
 // Mints the single-use ws-tickets the browser puts on the WS URL. Admin role
-// is enforced here (via requireAdmin) while the JWT is still in the
-// Authorization header -- the credential never rides on the socket.
-admin.post("/ws-ticket", async (c) => {
+// is enforced here (via requireAdmin) while the real credential is still in
+// the Authorization header -- it never rides on the socket.
+admin.post("/ws-ticket", requireScope("admin:ws-ticket"), async (c) => {
   const userId = c.get("userId") as string;
   if (!wsTicketLimiter.allow(userId)) {
     return c.json({ error: "Too many ticket requests, try again later" }, 429);
@@ -156,7 +163,7 @@ admin.post("/ws-ticket", async (c) => {
   return c.json({ ticket, expires_in: 30 });
 });
 
-admin.post("/instances/:id/ws-ticket", async (c) => {
+admin.post("/instances/:id/ws-ticket", requireScope("admin:ws-ticket"), async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
@@ -190,7 +197,7 @@ admin.post("/instances/:id/ws-ticket", async (c) => {
 // /instances/:id/start|stop routes, but looked up without an owning-user
 // filter since the caller's authority here comes from the admin role check,
 // not instance ownership.
-admin.post("/instances/:id/start", async (c) => {
+admin.post("/instances/:id/start", requireScope("admin:instances"), async (c) => {
   const id = c.req.param("id");
 
   const instance = await getInstanceByIdAdmin(id);
@@ -207,7 +214,7 @@ admin.post("/instances/:id/start", async (c) => {
   }
 });
 
-admin.post("/instances/:id/stop", async (c) => {
+admin.post("/instances/:id/stop", requireScope("admin:instances"), async (c) => {
   const id = c.req.param("id");
 
   const instance = await getInstanceByIdAdmin(id);
@@ -239,7 +246,7 @@ admin.post("/instances/:id/stop", async (c) => {
   return c.json(updated);
 });
 
-admin.delete("/instances/:id", async (c) => {
+admin.delete("/instances/:id", requireScope("admin:instances"), async (c) => {
   const id = c.req.param("id");
 
   const instance = await getInstanceByIdAdmin(id);

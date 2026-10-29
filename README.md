@@ -196,7 +196,11 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 
 ## API reference
 
-All `/instances` and `/metrics` routes require authentication: send the Supabase JWT either as `Authorization: Bearer <token>` or as a `?token=<token>` query parameter (the query param exists because the browser's native `EventSource` cannot set custom headers).
+All `/instances`, `/metrics` and `/admin` REST routes require `Authorization: Bearer <node token>`. A node token is a 60-second Ed25519 JWT that web-admin or web-streamwizard signs for one call: `aud` is this node's id, `scope` is the one action it allows (`instances:control`, `files`, `ws-ticket`, `admin:instances`, ...) and `iid` names the instance on any route with an `:id`. The node verifies it with the public keys it gets from `GET /api/nodes/me` (one key set per environment, so a new node needs no extra config). A token for another node, another scope or another instance is refused (`401`/`403`). `/admin` routes also need `role: "admin"` in the token and the admin role in `user_roles`.
+
+The caller's Supabase session JWT is still accepted, without scope checks, while the web apps switch over; that path will be removed.
+
+WebSocket upgrades (noVNC, obs-websocket, the admin metrics stream) can't send headers, so they use a 30-second single-use `?ticket=` from the matching `POST .../ws-ticket` route instead.
 
 ### `GET /health`
 
@@ -288,5 +292,5 @@ All `/instances` and `/metrics` routes require authentication: send the Supabase
 
 ### `GET /admin/metrics/stream`
 
-- **Auth:** required — a Supabase JWT (`Authorization: Bearer <token>` or `?token=`), same as every other route here, but the caller must additionally have the `admin` role in `user_roles`. `403` if the JWT is valid but the user isn't an admin.
-- **Behavior:** WebSocket. Pushes a `MetricsPayload` immediately on connect and then every 3 seconds, covering **every** instance on this node (not scoped to one user) — this is what a panel's admin Nodes page consumes. Since this is gated by the caller's own admin-scoped JWT rather than a node-wide secret, the admin's browser can connect directly — no server-side relay needed.
+- **Auth:** a single-use `?ticket=` from `POST /admin/ws-ticket` (scope `metrics`), which itself needs an `admin:ws-ticket` node token and the `admin` role in `user_roles`.
+- **Behavior:** WebSocket. Pushes a `MetricsPayload` immediately on connect and then every 3 seconds, covering **every** instance on this node (not scoped to one user) — this is what a panel's admin Nodes page consumes. Since the ticket is minted per admin, the admin's browser can connect directly — no server-side relay needed.

@@ -1,3 +1,6 @@
+import type { JWK } from "jose";
+import type { NodeTokenClaims } from "../services/node-token";
+
 export type InstanceStatus = "creating" | "running" | "stopped" | "error";
 
 // Mirrors the obs_nodes row returned verbatim by GET /api/nodes/me (plus
@@ -27,6 +30,10 @@ export interface Node {
   // the plaintext as a Bearer on the /obs route; we only ever hold the hash.
   // null when no command key has been provisioned yet.
   command_key_hash: string | null;
+  // Public keys (JWKS) that verify the node tokens web-admin and
+  // web-streamwizard sign for calls to this node. One set per environment,
+  // shared by every node. null/absent until rest-api has NODE_TOKEN_PUBLIC_JWKS.
+  node_token_jwks?: { keys: JWK[] } | null;
   created_at: string;
 }
 
@@ -125,5 +132,8 @@ export interface MetricsPayload {
 
 export interface AppVariables {
   userId: string;
+  // Set when the caller presented a node token. null for the legacy Supabase
+  // session JWT, which carries no scope -- see middleware/auth.ts.
+  nodeToken: NodeTokenClaims | null;
 }
 
