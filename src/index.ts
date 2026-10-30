@@ -13,9 +13,16 @@ import { persistAndRemoveLocalConfig, pushObsConfig } from "./services/obs-confi
 import { isInstanceLocked, withInstanceLock } from "./utils/instance-lock";
 import { mapLimit } from "./utils/concurrency";
 import { restartInstance } from "./services/instance-lifecycle";
+import { sweepUnentitledInstances } from "./services/plan-sweep";
 import { checkS3 } from "./clients/s3";
 import { NODE_ID } from "./utils/node";
-import { AUTOSAVE_INSTANCE_CONCURRENCY, CONFIG_AUTOSAVE_INTERVAL_MS, MAX_REQUEST_BODY_BYTES, OBS_EVENT_RESYNC_INTERVAL_MS } from "./utils/constants";
+import {
+  AUTOSAVE_INSTANCE_CONCURRENCY,
+  CONFIG_AUTOSAVE_INTERVAL_MS,
+  MAX_REQUEST_BODY_BYTES,
+  OBS_EVENT_RESYNC_INTERVAL_MS,
+  PLAN_SWEEP_INTERVAL_MS,
+} from "./utils/constants";
 import { startMetricsPersistence } from "./services/metrics-persist";
 import { loadCommandKeyHash, startCommandKeyRefresh } from "./services/command-key";
 import { attachInstance, detachAll, detachInstance, syncInstances } from "./services/obs-event-listener";
@@ -134,6 +141,13 @@ setInterval(() => {
     log("error", "config autosave pass failed", { error: (err as Error).message }),
   );
 }, CONFIG_AUTOSAVE_INTERVAL_MS);
+
+// Stops instances whose owner lost their Cloud OBS plan (see PLAN_SWEEP_INTERVAL_MS).
+setInterval(() => {
+  sweepUnentitledInstances(NODE_ID).catch((err) =>
+    log("error", "plan sweep failed", { error: (err as Error).message }),
+  );
+}, PLAN_SWEEP_INTERVAL_MS);
 
 // Each push takes the instance lock so it can't land an older upload after a
 // stop's final push, or resurrect a media file a route just deleted. An

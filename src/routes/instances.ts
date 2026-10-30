@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authMiddleware } from "../middleware/auth";
 import { requireScope } from "../middleware/scope";
 import {
+  canInteractCloudObs,
   countActiveInstances,
   deleteInstance,
   getInstanceById,
@@ -35,7 +36,7 @@ import { syncPlugins } from "../services/plugins";
 import { encryptPassword, generateVncPassword } from "../utils/crypto";
 import { requireStreamKey, StreamKeyNotGrantedError } from "../services/twitch";
 import { consumeTicket, issueTicket, type Ticket, type TicketScope } from "../services/ws-tickets";
-import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
+import { restartInstance, resolveVncPassword, stopInstance } from "../services/instance-lifecycle";
 import type { AppVariables, CreateInstanceBody } from "../types";
 
 // Upstream connect must complete within this window or the proxy gives up
@@ -421,6 +422,17 @@ instances.post("/:id/start", requireScope("instances:control"), async (c) => {
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
+  // The plan can be revoked or lapse after the instance was created, and the
+  // caller may hold a token minted before that, so ask every time. A failed
+  // lookup refuses the start rather than letting it through.
+  let planActive: boolean;
+  try {
+    planActive = await canInteractCloudObs(userId);
+  } catch (err) {
+    log("warn", "plan check failed, refusing start", { instanceId: id, error: (err as Error).message });
+    return c.json({ error: "Couldn't check your Cloud OBS plan. Try again in a moment." }, 503);
+  }
+  if (!planActive) return c.json({ error: "Your Cloud OBS plan isn't active.", code: "plan_required" }, 403);
   // A second start while the first is still provisioning must not queue: it
   // would run against this (stale) row after the container is already up.
   if (isInstanceLocked(id)) return c.json({ error: "Instance operation already in progress" }, 409);
@@ -443,33 +455,7 @@ instances.post("/:id/stop", requireScope("instances:control"), async (c) => {
   if (!instance.container_id)
     return c.json({ error: "Instance has no container" }, 400);
 
-  const updated = await withInstanceLock(id, async () => {
-    const containerId = instance.container_id as string;
-    markApiStopping(containerId);
-    // Leading-edge signal: this stop is deliberate. Lets other devices show
-    // "Stopping…" instead of reading the imminent socket drop as a blip.
-    broadcastLifecycle(instance.user_id, id, "stopping");
-    try {
-      await stopContainer(containerId);
-
-      await clearStreamKey(instance.id).catch((e) =>
-        log("warn", "failed to clear stream key before push", { instanceId: instance.id, error: (e as Error).message })
-      );
-
-      await persistAndRemoveLocalConfig(instance.user_id, instance.id);
-
-      await removeContainer(containerId).catch((e) =>
-        debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-      );
-
-      const result = await updateInstance(id, { container_id: null, status: "stopped" });
-      broadcastLifecycle(instance.user_id, id, "stopped");
-      return result;
-    } finally {
-      clearApiStopping(containerId);
-    }
-  });
-
+  const updated = await stopInstance({ ...instance, container_id: instance.container_id });
   return c.json(updated);
 });
 

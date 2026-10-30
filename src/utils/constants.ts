@@ -18,6 +18,11 @@ export const OBS_MEDIA_QUOTA_MB_FALLBACK = Number(process.env.OBS_MEDIA_QUOTA_MB
 // that loss window for running instances.
 export const CONFIG_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 
+// How often the node stops running instances whose owner lost their Cloud OBS
+// plan (services/plan-sweep.ts). web-admin stops them right away on a revoke;
+// this catches a grant that simply expires, and any stop that didn't land.
+export const PLAN_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
 // Parallel S3 requests per sync (one instance's push/pull, or the plugin
 // mirror), and how many instances one autosave pass pushes at once.
 export const S3_SYNC_CONCURRENCY = 8;

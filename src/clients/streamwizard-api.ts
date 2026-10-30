@@ -117,6 +117,18 @@ export async function apiIsAdmin(userId: string): Promise<boolean> {
   return res.data.is_admin;
 }
 
+/** Whether the user's Cloud OBS plan may start an instance right now. */
+export async function apiCanInteractCloudObs(userId: string): Promise<boolean> {
+  const res = await StreamwizardApi.get<{ can_interact: boolean }>(`/api/nodes/users/${userId}/cloud-obs-access`);
+  return res.data.can_interact;
+}
+
+/** Running instances on this node whose owner has lost their Cloud OBS plan. */
+export async function apiListUnentitledInstanceIds(): Promise<string[]> {
+  const res = await StreamwizardApi.get<{ instance_ids: string[] }>("/api/nodes/instances/unentitled");
+  return res.data.instance_ids;
+}
+
 export async function apiGetSubscriptionLimits(subscriptionId: string): Promise<CloudObsPlanLimits> {
   const res = await StreamwizardApi.get<CloudObsPlanLimits>(`/api/nodes/subscriptions/${subscriptionId}/limits`);
   return res.data;
