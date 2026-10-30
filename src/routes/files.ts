@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { authMiddleware } from "../middleware/auth";
+import { requireScope } from "../middleware/scope";
 import { getInstanceById } from "../clients/supabase";
 import {
   deleteFile,
@@ -27,8 +28,8 @@ const files = new Hono<{ Variables: AppVariables }>();
 // per user like instance creation does.
 const uploadLimiter = new KeyedRateLimiter(30, 60_000);
 
-files.use("/:id/files", authMiddleware);
-files.use("/:id/files/*", authMiddleware);
+files.use("/:id/files", authMiddleware, requireScope("files"));
+files.use("/:id/files/*", authMiddleware, requireScope("files"));
 
 // Loads the instance for the caller, 404s if not owned, 409s if not running.
 // Returns the instance with storage_quota_mb defaulted for pre-migration rows.
