@@ -11,7 +11,7 @@ import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
 import { upgradeWebSocket } from "../utils/ws";
 import { debug, log } from "../utils/logger";
 import { persistAndRemoveLocalConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
-import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
+import { restartInstance, resolveVncPassword, stopInstance } from "../services/instance-lifecycle";
 import { StreamKeyNotGrantedError } from "../services/twitch";
 import { proxyRoute } from "./instances";
 import { consumeTicket, issueTicket } from "../services/ws-tickets";
@@ -221,28 +221,7 @@ admin.post("/instances/:id/stop", requireScope("admin:instances"), async (c) => 
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (!instance.container_id) return c.json({ error: "Instance has no container" }, 400);
 
-  const updated = await withInstanceLock(id, async () => {
-    const containerId = instance.container_id as string;
-    markApiStopping(containerId);
-    // Leading-edge signal: deliberate stop. Other devices show "Stopping…".
-    broadcastLifecycle(instance.user_id, id, "stopping");
-    try {
-      await stopContainer(containerId);
-
-      await persistAndRemoveLocalConfig(instance.user_id, instance.id);
-
-      await removeContainer(containerId).catch((e) =>
-        debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-      );
-
-      const result = await updateInstance(id, { container_id: null, status: "stopped" });
-      broadcastLifecycle(instance.user_id, id, "stopped");
-      return result;
-    } finally {
-      clearApiStopping(containerId);
-    }
-  });
-
+  const updated = await stopInstance({ ...instance, container_id: instance.container_id });
   return c.json(updated);
 });
 
