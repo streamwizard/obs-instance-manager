@@ -39,6 +39,9 @@ export interface CreateInstanceInput {
   obsWsPasswordCiphertext: string | null;
   obsWsPasswordIv: string | null;
   obsWsPasswordTag: string | null;
+  // The caller's instances:create node token, forwarded to rest-api so it can
+  // check the user asked for this instance (SW-473). null for a session JWT.
+  nodeToken: string | null;
 }
 
 // Throws CreateInstanceError (refused up front), StreamKeyNotGrantedError
@@ -111,7 +114,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
     vnc_password_ciphertext: encryptedVncPassword.ciphertext,
     vnc_password_iv: encryptedVncPassword.iv,
     vnc_password_tag: encryptedVncPassword.tag,
-  });
+  }, input.nodeToken);
 
   // After the row insert, not before: rest-api only releases a user's stream
   // key to a node that already hosts an instance for them (403 otherwise), so

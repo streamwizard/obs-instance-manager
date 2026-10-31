@@ -43,6 +43,9 @@ mock.module("@/clients/docker", () => ({
   removeContainer: async (id: string) => {
     calls.removeContainer.push(id);
   },
+  stopContainer: async () => {},
+  markApiStopping: () => {},
+  clearApiStopping: () => {},
 }));
 mock.module("@/clients/supabase", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => {
@@ -68,6 +71,8 @@ mock.module("@/services/storage/obs-config", () => ({
     calls.injectObsWsPassword++;
   },
   injectStreamKey: async () => {},
+  clearStreamKey: async () => {},
+  persistAndRemoveLocalConfig: async () => true,
 }));
 mock.module("@/services/storage/plugins", () => ({ syncPlugins: async () => {} }));
 // Both names so the stub matches main (getStreamKey) and the stream-key-scope

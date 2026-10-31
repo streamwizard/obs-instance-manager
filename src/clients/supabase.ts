@@ -1,4 +1,5 @@
 import {
+  apiCanInteractCloudObs,
   apiCountActiveInstances,
   apiDeleteInstance,
   apiGetInstanceById,
@@ -8,6 +9,7 @@ import {
   apiInsertInstance,
   apiIsAdmin,
   apiListNodeInstances,
+  apiListUnentitledInstanceIds,
   apiListUserInstances,
   apiUpdateInstance,
   apiUpdateInstanceByContainerId,
@@ -51,8 +53,9 @@ export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance
 
 export async function insertInstance(
   instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+  nodeToken: string | null,
 ): Promise<Instance> {
-  const created = await apiInsertInstance(instance);
+  const created = await apiInsertInstance(instance, nodeToken);
   invalidateNodeInstances();
   return created;
 }
@@ -80,4 +83,12 @@ export async function countActiveInstances(_nodeId: string): Promise<number> {
 
 export async function getSubscriptionLimits(subscriptionId: string): Promise<CloudObsPlanLimits> {
   return apiGetSubscriptionLimits(subscriptionId);
+}
+
+export async function canInteractCloudObs(userId: string): Promise<boolean> {
+  return apiCanInteractCloudObs(userId);
+}
+
+export async function listUnentitledInstanceIds(_nodeId: string): Promise<string[]> {
+  return apiListUnentitledInstanceIds();
 }

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { authMiddleware } from "@/middleware/auth";
 import { requireScope } from "@/middleware/scope";
 import { rateLimitByUser } from "@/middleware/rate-limit";
-import { getInstanceById, listUserInstances } from "@/clients/supabase";
+import { canInteractCloudObs, getInstanceById, listUserInstances } from "@/clients/supabase";
 import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { createInstanceSchema } from "@/schemas/instance";
 import { instanceWsTicketSchema } from "@/schemas/ws-ticket";
@@ -16,6 +16,7 @@ import { restartInstance } from "@/services/instances/instance-lifecycle";
 import { StreamKeyNotGrantedError } from "@/services/instances/twitch";
 import { isInstanceLocked } from "@/utils/instance-lock";
 import { KeyedRateLimiter } from "@/utils/rate-limit";
+import { log } from "@/utils/logger";
 import type { AppVariables } from "@/types";
 
 const instances = new Hono<{ Variables: AppVariables }>();
@@ -104,6 +105,7 @@ instances.post(
         obsWsPasswordCiphertext: body.obs_ws_password_ciphertext ?? null,
         obsWsPasswordIv: body.obs_ws_password_iv ?? null,
         obsWsPasswordTag: body.obs_ws_password_tag ?? null,
+        nodeToken: c.get("nodeTokenRaw") ?? null,
       });
       return c.json(created, 201);
     } catch (err) {
@@ -122,6 +124,17 @@ instances.post("/:id/start", requireScope("instances:control"), async (c) => {
   const instance = await getInstanceById(id, userId);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (instance.status === "running") return c.json({ error: "Instance is already running" }, 400);
+  // The plan can be revoked or lapse after the instance was created, and the
+  // caller may hold a token minted before that, so ask every time. A failed
+  // lookup refuses the start rather than letting it through.
+  let planActive: boolean;
+  try {
+    planActive = await canInteractCloudObs(userId);
+  } catch (err) {
+    log("warn", "plan check failed, refusing start", { instanceId: id, error: (err as Error).message });
+    return c.json({ error: "Couldn't check your Cloud OBS plan. Try again in a moment." }, 503);
+  }
+  if (!planActive) return c.json({ error: "Your Cloud OBS plan isn't active.", code: "plan_required" }, 403);
   // A second start while the first is still provisioning must not queue: it
   // would run against this (stale) row after the container is already up.
   if (isInstanceLocked(id)) return c.json({ error: "Instance operation already in progress" }, 409);

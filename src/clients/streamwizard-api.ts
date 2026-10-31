@@ -81,10 +81,17 @@ export async function apiGetInstanceByIdAdmin(instanceId: string): Promise<Insta
 
 // storage_quota_mb / used_storage_bytes are DB-defaulted (see migration) and
 // never set by the node at create time, so they're omitted from the payload.
+//
+// nodeToken is the user's instances:create token from the web app. rest-api
+// takes user_id from this body, and the token is what proves that user asked
+// for the instance (SW-473); our own API key can't.
 export async function apiInsertInstance(
   instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+  nodeToken: string | null,
 ): Promise<Instance> {
-  const res = await StreamwizardApi.post<Instance>("/api/nodes/instances", instance);
+  const res = await StreamwizardApi.post<Instance>("/api/nodes/instances", instance, {
+    headers: nodeToken ? { "X-Node-Token": nodeToken } : undefined,
+  });
   return res.data;
 }
 
@@ -115,6 +122,18 @@ export async function apiListUserInstances(userId: string): Promise<Instance[]> 
 export async function apiIsAdmin(userId: string): Promise<boolean> {
   const res = await StreamwizardApi.get<{ is_admin: boolean }>(`/api/nodes/users/${userId}/is-admin`);
   return res.data.is_admin;
+}
+
+/** Whether the user's Cloud OBS plan may start an instance right now. */
+export async function apiCanInteractCloudObs(userId: string): Promise<boolean> {
+  const res = await StreamwizardApi.get<{ can_interact: boolean }>(`/api/nodes/users/${userId}/cloud-obs-access`);
+  return res.data.can_interact;
+}
+
+/** Running instances on this node whose owner has lost their Cloud OBS plan. */
+export async function apiListUnentitledInstanceIds(): Promise<string[]> {
+  const res = await StreamwizardApi.get<{ instance_ids: string[] }>("/api/nodes/instances/unentitled");
+  return res.data.instance_ids;
 }
 
 export async function apiGetSubscriptionLimits(subscriptionId: string): Promise<CloudObsPlanLimits> {

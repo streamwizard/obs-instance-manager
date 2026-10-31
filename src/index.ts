@@ -8,6 +8,7 @@ import { startSceneListenerSync } from "@/services/obs/obs-event-listener";
 import { startMetricsPersistence } from "@/services/metrics/metrics-persist";
 import { loadCommandKeyHash, startCommandKeyRefresh } from "@/services/auth/command-key";
 import { startConfigAutosave } from "@/services/storage/config-autosave";
+import { startPlanSweep } from "@/services/instances/plan-sweep";
 import { NODE_ID } from "@/utils/node";
 import { log } from "@/utils/logger";
 
@@ -31,6 +32,7 @@ await loadCommandKeyHash();
 startCommandKeyRefresh();
 
 startConfigAutosave();
+startPlanSweep(NODE_ID);
 
 const server = Bun.serve({
   port,
