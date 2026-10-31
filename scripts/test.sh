@@ -5,7 +5,7 @@
 # into a process-global module registry that neither mock.restore() nor a
 # cache-busting import specifier can undo. So a mock registered by one file
 # leaks into every file discovered after it: routes/obs.test.ts stubs
-# services/command-key, which meant services/command-key.test.ts was silently
+# services/auth/command-key, which meant services/auth/command-key.test.ts was silently
 # asserting against that stub instead of the real module.
 #
 # Per-file isolation costs a few seconds and makes the mocks mean what they say.

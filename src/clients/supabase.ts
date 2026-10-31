@@ -13,12 +13,12 @@ import {
   apiListUserInstances,
   apiUpdateInstance,
   apiUpdateInstanceByContainerId,
-} from "./streamwizard-api";
-import type { CloudObsPlanLimits, Instance, Node } from "../types";
-// Import cycle with services/instance-cache (it reads listNodeInstances from
+} from "@/clients/streamwizard-api";
+import type { CloudObsPlanLimits, Instance, Node } from "@/types";
+// Import cycle with services/cache/instance-cache (it reads listNodeInstances from
 // this module) — harmless: both sides only call across the boundary at
 // runtime, never during module evaluation.
-import { invalidateNodeInstances } from "../services/instance-cache";
+import { invalidateNodeInstances } from "@/services/cache/instance-cache";
 
 export async function isAdmin(userId: string): Promise<boolean> {
   return apiIsAdmin(userId);
@@ -47,7 +47,7 @@ export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance
 // The four instance mutations below are the single choke point through which
 // every change to this node's instances flows (provision, start/stop, the
 // crash watchdog, delete). Each one invalidates the cached instance list on
-// success, which is what makes services/instance-cache correct rather than
+// success, which is what makes services/cache/instance-cache correct rather than
 // merely fresh-ish — see the header comment there before adding a mutation
 // path that bypasses this file.
 

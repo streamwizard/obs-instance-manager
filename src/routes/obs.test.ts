@@ -18,7 +18,7 @@ let mockInstance: Record<string, unknown> | null = null;
 const unused = () => {
   throw new Error("not stubbed");
 };
-mock.module("../clients/supabase", () => ({
+mock.module("@/clients/supabase", () => ({
   getInstanceByIdAdmin: async () => mockInstance,
   isAdmin: unused,
   getNode: unused,
@@ -35,10 +35,10 @@ mock.module("../clients/supabase", () => ({
 }));
 
 // Command-key auth is exercised through its two observable states here; the
-// hash-loading/refresh logic itself lives in services/command-key.ts.
+// hash-loading/refresh logic itself lives in services/auth/command-key.ts.
 let keyLoaded = true;
 const COMMAND_KEY = "good-command-key";
-mock.module("../services/command-key", () => ({
+mock.module("@/services/auth/command-key", () => ({
   verifyCommandKey: async (token: string) => keyLoaded && token === COMMAND_KEY,
   hasCommandKey: () => keyLoaded,
   loadCommandKeyHash: async () => {},
@@ -46,7 +46,7 @@ mock.module("../services/command-key", () => ({
 }));
 
 const { default: obs } = await import("./obs");
-const { validateObsCommands, ObsCommandError } = await import("../services/obs-command");
+const { validateObsCommands, ObsCommandError } = await import("@/services/obs/obs-command");
 
 function makeApp() {
   const app = new Hono();

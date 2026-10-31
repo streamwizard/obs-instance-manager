@@ -1,7 +1,7 @@
 import { createMiddleware } from "hono/factory";
-import type { AppVariables } from "../types";
-import type { NodeTokenScope } from "../services/node-token";
-import { debug } from "../utils/logger";
+import type { AppVariables } from "@/types";
+import type { NodeTokenScope } from "@/services/auth/node-token";
+import { debug } from "@/utils/logger";
 
 // Per-route check for node tokens (see middleware/auth.ts): the token must
 // carry exactly this route's scope, and on any route with an :id param it

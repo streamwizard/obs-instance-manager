@@ -6,21 +6,17 @@
 // bind mount), so management is running-only by design; when stopped the UI
 // shows "start the instance to manage files" and these 409.
 import { Hono } from "hono";
-import { z } from "zod";
-import { authMiddleware } from "../middleware/auth";
-import { requireScope } from "../middleware/scope";
-import { getInstanceById } from "../clients/supabase";
-import {
-  deleteFile,
-  getListing,
-  MediaError,
-  renameFile,
-  resolveDownload,
-  uploadFile,
-} from "../services/media";
-import { KeyedRateLimiter } from "../utils/rate-limit";
-import { OBS_MEDIA_QUOTA_MB_FALLBACK } from "../utils/constants";
-import type { AppVariables, Instance } from "../types";
+import { authMiddleware } from "@/middleware/auth";
+import { requireScope } from "@/middleware/scope";
+import { rateLimitByUser } from "@/middleware/rate-limit";
+import { getInstanceById } from "@/clients/supabase";
+import { deleteFile, getListing, renameFile, resolveDownload, uploadFile } from "@/services/storage/media";
+import { MediaError } from "@/services/storage/media-error";
+import { deleteFileSchema, renameFileSchema } from "@/schemas/files";
+import { KeyedRateLimiter } from "@/utils/rate-limit";
+import { attachmentDisposition } from "@/utils/content-disposition";
+import { OBS_MEDIA_QUOTA_MB_FALLBACK } from "@/utils/constants";
+import type { AppVariables, Instance } from "@/types";
 
 const files = new Hono<{ Variables: AppVariables }>();
 
@@ -74,15 +70,12 @@ files.get("/:id/files/download", async (c) => {
   try {
     const { abs, name, size } = await resolveDownload(loaded.instance.id, path);
     // Defence in depth: names are already control-char-free (lexicalClean), but
-    // build the header safely anyway -- an ASCII-only quoted fallback plus an
-    // RFC 5987 filename* for the exact (percent-encoded) name. Never interpolate
-    // a raw filename into a header value.
-    const asciiName = name.replace(/[^A-Za-z0-9._-]/g, "_");
+    // build the header safely anyway.
     return new Response(Bun.file(abs).stream(), {
       headers: {
         "Content-Type": "application/octet-stream",
         "Content-Length": String(size),
-        "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "Content-Disposition": attachmentDisposition(name),
       },
     });
   } catch (err) {
@@ -91,14 +84,10 @@ files.get("/:id/files/download", async (c) => {
 });
 
 // POST /instances/:id/files  (raw body = file bytes; path in ?path= or header)
-// Bypasses the global MAX_REQUEST_BODY_BYTES cap -- see index.ts. Size limits
-// are enforced while streaming in services/media.ts.
-files.post("/:id/files", async (c) => {
+// Bypasses the global MAX_REQUEST_BODY_BYTES cap -- see middleware/body-limit.ts. Size limits
+// are enforced while streaming in services/storage/media.ts.
+files.post("/:id/files", rateLimitByUser(uploadLimiter, "Too many uploads, try again later"), async (c) => {
   const userId = c.get("userId") as string;
-  if (!uploadLimiter.allow(userId)) {
-    return c.json({ error: "Too many uploads, try again later" }, 429);
-  }
-
   const loaded = await loadRunning(userId, c.req.param("id"));
   if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
 
@@ -119,15 +108,13 @@ files.post("/:id/files", async (c) => {
   }
 });
 
-const renameSchema = z.object({ from: z.string().min(1), to: z.string().min(1) });
-
 // PATCH /instances/:id/files/rename  { from, to }
 files.patch("/:id/files/rename", async (c) => {
   const userId = c.get("userId") as string;
   const loaded = await loadRunning(userId, c.req.param("id"));
   if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
 
-  const parsed = renameSchema.safeParse(await c.req.json().catch(() => null));
+  const parsed = renameFileSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "Invalid rename payload" }, 400);
 
   try {
@@ -138,15 +125,13 @@ files.patch("/:id/files/rename", async (c) => {
   }
 });
 
-const deleteSchema = z.object({ path: z.string().min(1) });
-
 // DELETE /instances/:id/files  { path }
 files.delete("/:id/files", async (c) => {
   const userId = c.get("userId") as string;
   const loaded = await loadRunning(userId, c.req.param("id"));
   if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
 
-  const parsed = deleteSchema.safeParse(await c.req.json().catch(() => null));
+  const parsed = deleteFileSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: "Invalid delete payload" }, 400);
 
   try {

@@ -1,7 +1,7 @@
 import type { Context, Next } from "hono";
-import type { AppVariables } from "../types";
-import { debug } from "../utils/logger";
-import { hasCommandKey, verifyCommandKey } from "../services/command-key";
+import type { AppVariables } from "@/types";
+import { debug } from "@/utils/logger";
+import { hasCommandKey, verifyCommandKey } from "@/services/auth/command-key";
 
 // Per-node command-key auth for the public /obs route (obs-auto-switcher). The
 // switcher presents this node's obs_command key as a Bearer; we compare its

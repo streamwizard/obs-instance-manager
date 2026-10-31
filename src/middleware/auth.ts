@@ -1,8 +1,8 @@
 import type { Context, Next } from "hono";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import type { AppVariables } from "../types";
-import { debug } from "../utils/logger";
-import { isNodeToken, verifyNodeToken } from "../services/node-token";
+import type { AppVariables } from "@/types";
+import { debug } from "@/utils/logger";
+import { isNodeToken, verifyNodeToken } from "@/services/auth/node-token";
 
 const supabaseUrl = process.env.SUPABASE_URL;
 
@@ -20,7 +20,7 @@ const jwks = createRemoteJWKSet(new URL("/auth/v1/.well-known/jwks.json", supaba
 
 // Two credentials are accepted while the web apps switch over (SW-481):
 //
-//   - a node token (services/node-token.ts): 60 seconds, bound to this node,
+//   - a node token (services/auth/node-token.ts): 60 seconds, bound to this node,
 //     one scope and usually one instance. Routes check the scope with
 //     requireScope (middleware/scope.ts).
 //   - LEGACY: the caller's Supabase session JWT, verified below. It carries no
@@ -29,7 +29,7 @@ const jwks = createRemoteJWKSet(new URL("/auth/v1/.well-known/jwks.json", supaba
 //
 // Either one only ever arrives in the Authorization header. WebSocket upgrades
 // (which can't set headers) authenticate with single-use ws-tickets instead --
-// see services/ws-tickets.ts -- so there's deliberately no query-param token path.
+// see services/auth/ws-tickets.ts -- so there's deliberately no query-param token path.
 function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
   const header = c.req.header("Authorization");
   if (header?.startsWith("Bearer ")) {

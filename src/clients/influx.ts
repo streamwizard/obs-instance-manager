@@ -1,5 +1,5 @@
 import { InfluxDB, Point, type WriteApi } from "@influxdata/influxdb-client";
-import { log } from "../utils/logger";
+import { log } from "@/utils/logger";
 
 // Time-series sink for node/instance metrics (CPU/RAM/GPU/bandwidth). Copied
 // from ingest-server's packages/metrics/src/influx-client.ts — this repo
@@ -47,11 +47,6 @@ export function pushPoint(point: Point): void {
   } catch {
     // never throw from metrics code
   }
-}
-
-export function isMetricsEnabled(): boolean {
-  const { INFLUXDB_URL, INFLUXDB_TOKEN, INFLUXDB_ORG } = process.env;
-  return !!(INFLUXDB_URL && INFLUXDB_TOKEN && INFLUXDB_ORG);
 }
 
 export async function closeInflux(): Promise<void> {

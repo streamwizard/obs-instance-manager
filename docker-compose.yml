@@ -5,7 +5,7 @@ services:
   # to a specific build without editing this file.
   api:
     image: ghcr.io/streamwizard/obs-instance-manager:${OBS_IMAGE_TAG:-latest}
-    container_name: obs-panel-api
+    container_name: obs-instance-manager
     restart: unless-stopped
     ports:
       # Never published on the LAN or a public interface. Two bindings:

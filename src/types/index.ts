@@ -1,5 +1,5 @@
 import type { JWK } from "jose";
-import type { NodeTokenClaims } from "../services/node-token";
+import type { NodeTokenClaims } from "@/services/auth/node-token";
 
 export type InstanceStatus = "creating" | "running" | "stopped" | "error";
 
@@ -76,15 +76,6 @@ export interface CloudObsPlanLimits {
   // Plan-owned OBS template folder under obs-templates/. Optional: plans seeded
   // before this key exists fall back to DEFAULT_TEMPLATE.
   config_template?: string;
-}
-
-export interface CreateInstanceBody {
-  subscription_id: string;
-  template?: string;
-  obs_ws_password?: string;
-  obs_ws_password_ciphertext?: string;
-  obs_ws_password_iv?: string;
-  obs_ws_password_tag?: string;
 }
 
 export interface HostMetrics {

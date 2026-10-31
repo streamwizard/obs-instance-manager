@@ -1,4 +1,4 @@
-import { debug, log } from "../utils/logger";
+import { debug, log } from "@/utils/logger";
 
 // Lifecycle transitions we push to the owning user's browser clients via the
 // main ws-server's /internal/broadcast fan-out. "starting"/"stopping" are
@@ -11,14 +11,14 @@ import { debug, log } from "../utils/logger";
 export type LifecycleAction = "starting" | "started" | "stopping" | "stopped" | "error" | "deleted";
 
 const LIFECYCLE_EVENT_TYPE = "streamwizard.obs_instance_lifecycle";
-// Emitted by services/obs-event-listener.ts for every program-scene change the
+// Emitted by services/obs/obs-event-listener.ts for every program-scene change the
 // container makes, whatever the source (auto-switcher, browser panel, the
 // streamer clicking around in OBS over VNC, a hotkey, a transition). Same
 // sync-with-@repo/types caveat as the lifecycle type above.
 const SCENE_EVENT_TYPE = "streamwizard.obs_scene_changed";
 const BROADCAST_TIMEOUT_MS = 3_000;
 
-// Optional/skip-if-unset (like reportReconcile in docker.ts): read at module
+// Optional/skip-if-unset (like reportReconcile in services/docker/reconcile.ts): read at module
 // top without throwing so local dev and the test suite -- which don't set these
 // -- never break on import. Normalize a ws(s):// value to http(s):// the same
 // way the web app's config push does.
