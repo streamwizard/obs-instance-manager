@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { authMiddleware } from "../middleware/auth";
+import { requireScope } from "../middleware/scope";
 import { listUserInstances } from "../clients/supabase";
 import { getAllMetrics } from "../services/metrics";
 import { STREAM_INTERVAL_MS } from "../utils/constants";
@@ -9,7 +10,7 @@ import type { AppVariables } from "../types";
 
 const metrics = new Hono<{ Variables: AppVariables }>();
 
-metrics.use("*", authMiddleware);
+metrics.use("*", authMiddleware, requireScope("instances:read"));
 
 metrics.get("/snapshot", async (c) => {
   const userId = c.get("userId");

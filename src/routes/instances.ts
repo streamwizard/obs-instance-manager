@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { authMiddleware } from "../middleware/auth";
+import { requireScope } from "../middleware/scope";
 import {
   countActiveInstances,
   deleteInstance,
@@ -78,9 +79,10 @@ instances.all("/:id/selkies/*", userSelkies);
 instances.use("*", authMiddleware);
 
 // Mints a short-lived, single-use ticket that the browser then puts on the WS
-// URL (?ticket=...). Ownership is enforced here while the JWT is still in the
-// Authorization header, so the powerful credential never rides on the socket.
-instances.post("/:id/ws-ticket", async (c) => {
+// URL (?ticket=...). Ownership is enforced here while the real credential (a
+// node token, or the legacy session JWT) is still in the Authorization header,
+// so it never rides on the socket.
+instances.post("/:id/ws-ticket", requireScope("ws-ticket"), async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
@@ -228,7 +230,7 @@ export function proxyRoute(
   });
 }
 
-instances.get("/", async (c) => {
+instances.get("/", requireScope("instances:read"), async (c) => {
   const userId = c.get("userId") as string;
   const userInstances = await listUserInstances(userId);
 
@@ -244,7 +246,7 @@ instances.get("/", async (c) => {
   return c.json(withStatus);
 });
 
-instances.get("/:id", async (c) => {
+instances.get("/:id", requireScope("instances:read"), async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
@@ -258,7 +260,7 @@ instances.get("/:id", async (c) => {
   return c.json({ ...instance, docker_status });
 });
 
-instances.post("/", async (c) => {
+instances.post("/", requireScope("instances:create"), async (c) => {
   const userId = c.get("userId") as string;
 
   if (!createInstanceLimiter.allow(userId)) {
@@ -426,7 +428,7 @@ instances.post("/", async (c) => {
   }
 });
 
-instances.post("/:id/start", async (c) => {
+instances.post("/:id/start", requireScope("instances:control"), async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
@@ -446,7 +448,7 @@ instances.post("/:id/start", async (c) => {
   }
 });
 
-instances.post("/:id/stop", async (c) => {
+instances.post("/:id/stop", requireScope("instances:control"), async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
@@ -485,7 +487,7 @@ instances.post("/:id/stop", async (c) => {
   return c.json(updated);
 });
 
-instances.delete("/:id", async (c) => {
+instances.delete("/:id", requireScope("instances:delete"), async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
