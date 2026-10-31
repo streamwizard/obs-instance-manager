@@ -5,12 +5,16 @@ import { broadcastSceneChanged } from "@/clients/ws-server";
 import { decryptPassword } from "@/utils/crypto";
 import { debug, log } from "@/utils/logger";
 import { OBS_EVENT_RESYNC_INTERVAL_MS } from "@/utils/constants";
+import { NODE_ID } from "@/utils/node";
+import { OUTPUT_STATS_EVENT, OutputStatsRecorder, STATS_VENDOR_NAME } from "@/services/obs/output-stats";
 import type { Instance } from "@/types";
 
 // One long-lived obs-websocket connection per *running* instance, subscribed to
-// scene events only, so the platform learns the container's real program scene
+// scene events, so the platform learns the container's real program scene
 // no matter who changed it -- the auto-switcher, the browser panel, the
-// streamer clicking around in OBS over VNC, a hotkey, a transition.
+// streamer clicking around in OBS over VNC, a hotkey, a transition. It also
+// carries the streamwizard-obs-stats plugin's OutputStats vendor event, which
+// services/obs/output-stats.ts persists as stream-quality metrics.
 //
 // This lives on the node and talks container-to-container over obs-net, which
 // is the whole point: the product promise is that the streamer's computer is
@@ -36,6 +40,8 @@ interface Session {
   closing: boolean;
   /** Latched so a permanently unreachable instance warns once, not every 30s. */
   warnedUnreachable: boolean;
+  /** Folds the plugin's 1s OutputStats events into 10s obs_output points. */
+  outputStats: OutputStatsRecorder;
 }
 
 const CONNECT_TIMEOUT_MS = 5_000;
@@ -96,6 +102,7 @@ export function attachInstance(instance: Instance): void {
     retryTimer: null,
     closing: false,
     warnedUnreachable: false,
+    outputStats: new OutputStatsRecorder({ nodeId: NODE_ID, instanceId: instance.id, userId: instance.user_id }),
   };
   // Inserted before connecting so a second attach for the same instance (event
   // stream + resync racing) is a no-op rather than a duplicate socket.
@@ -114,6 +121,8 @@ export function detachInstance(instanceId: string): void {
     session.retryTimer = null;
   }
   sessions.delete(instanceId);
+  // Write whatever the last partial window holds; the instance is going away.
+  session.outputStats.flush();
 
   const obs = session.obs;
   session.obs = null;
@@ -179,10 +188,15 @@ async function connect(session: Session): Promise<void> {
   const obs = new OBSWebSocket();
   session.obs = obs;
 
-  // Scenes only: this socket exists for one event, and the high-volume
-  // categories (inputs, scene items, media) would be pure waste on the wire.
+  // Scenes + Vendors only: the high-volume categories (inputs, scene items,
+  // media) would be pure waste on the wire. Vendor events can't be filtered
+  // server-side, so the plugin's SourceStats arrives too and is ignored here.
   obs.on("CurrentProgramSceneChanged", (data: { sceneName?: string; sceneUuid?: string }) => {
     emitScene(session, data.sceneName, data.sceneUuid);
+  });
+  obs.on("VendorEvent", (data: { vendorName?: string; eventType?: string; eventData?: unknown }) => {
+    if (data.vendorName !== STATS_VENDOR_NAME || data.eventType !== OUTPUT_STATS_EVENT) return;
+    session.outputStats.record(data.eventData);
   });
   obs.on("ConnectionClosed", () => scheduleRetry(session));
   obs.on("ConnectionError", (err: Error) => {
@@ -196,7 +210,7 @@ async function connect(session: Session): Promise<void> {
     await Promise.race([
       obs.connect(url, session.password, {
         rpcVersion: 1,
-        eventSubscriptions: EventSubscription.Scenes,
+        eventSubscriptions: EventSubscription.Scenes | EventSubscription.Vendors,
       }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("obs-websocket connect timeout")), CONNECT_TIMEOUT_MS),
