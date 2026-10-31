@@ -1,7 +1,7 @@
 import { createLocalJWKSet, decodeJwt, errors, jwtVerify } from "jose";
-import { getCachedNode, refreshNode } from "./node-cache";
-import { debug } from "../utils/logger";
-import type { Node } from "../types";
+import { getCachedNode, refreshNode } from "@/services/cache/node-cache";
+import { debug } from "@/utils/logger";
+import type { Node } from "@/types";
 
 // Node tokens: the short-lived credential web-admin and web-streamwizard sign
 // for each call to this node, in place of the user's Supabase session JWT. A

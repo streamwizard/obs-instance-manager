@@ -1,10 +1,11 @@
 import OBSWebSocket, { EventSubscription } from "obs-websocket-js";
-import { instanceTarget, OBS_WS_PORT_INTERNAL } from "../clients/docker";
-import { refreshNodeInstances } from "./instance-cache";
-import { broadcastSceneChanged } from "../clients/ws-server";
-import { decryptPassword } from "../utils/crypto";
-import { debug, log } from "../utils/logger";
-import type { Instance } from "../types";
+import { instanceTarget, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
+import { refreshNodeInstances } from "@/services/cache/instance-cache";
+import { broadcastSceneChanged } from "@/clients/ws-server";
+import { decryptPassword } from "@/utils/crypto";
+import { debug, log } from "@/utils/logger";
+import { OBS_EVENT_RESYNC_INTERVAL_MS } from "@/utils/constants";
+import type { Instance } from "@/types";
 
 // One long-lived obs-websocket connection per *running* instance, subscribed to
 // scene events only, so the platform learns the container's real program scene
@@ -14,11 +15,11 @@ import type { Instance } from "../types";
 // This lives on the node and talks container-to-container over obs-net, which
 // is the whole point: the product promise is that the streamer's computer is
 // off once OBS is set up, so nothing here may depend on a browser, panel or VNC
-// session being open. (Watching the blind obsws proxy in routes/instances.ts
+// session being open. (Watching the blind obsws proxy in services/proxy/ws-proxy.ts
 // would only have worked while a browser held that socket, and the /obs command
 // path only ever sees the auto-switcher's own switches.)
 //
-// Deliberately NOT pooled into services/obs-command.ts -- that one stays
+// Deliberately NOT pooled into services/obs/obs-command.ts -- that one stays
 // connect-per-call for the reasons in its own comment. This module carries the
 // reconnect/lifecycle burden precisely because it must stay attached.
 
@@ -40,7 +41,7 @@ interface Session {
 const CONNECT_TIMEOUT_MS = 5_000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 30_000;
-// Same reasoning as RESTART_STAGGER_MS in clients/docker.ts: a node booting with
+// Same reasoning as RESTART_STAGGER_MS in utils/constants.ts: a node booting with
 // N instances shouldn't open N handshakes in the same tick.
 const ATTACH_STAGGER_MS = 500;
 
@@ -154,6 +155,22 @@ export async function syncInstances(): Promise<void> {
   }
 
   debug("obs-events", `sync complete, watching ${sessions.size} instance(s)`);
+}
+
+// Boot pass plus periodic resync (OBS_EVENT_RESYNC_INTERVAL_MS). The docker
+// event stream drives attach/detach live; this is the backstop for anything it
+// missed. The first pass isn't awaited: it staggers its attaches, and nothing
+// downstream -- least of all binding the HTTP port -- needs to wait on it.
+export function startSceneListenerSync(): void {
+  void syncInstances().catch((err) =>
+    log("error", "boot-time OBS scene listener sync failed", { error: (err as Error).message }),
+  );
+
+  setInterval(() => {
+    syncInstances().catch((err) =>
+      log("error", "OBS scene listener resync failed", { error: (err as Error).message }),
+    );
+  }, OBS_EVENT_RESYNC_INTERVAL_MS);
 }
 
 async function connect(session: Session): Promise<void> {

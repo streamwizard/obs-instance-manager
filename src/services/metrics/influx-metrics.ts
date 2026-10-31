@@ -1,6 +1,6 @@
 import { Point } from "@influxdata/influxdb-client";
-import { pushPoint } from "../clients/influx";
-import type { ContainerMetrics, HostMetrics, Instance, Node } from "../types";
+import { pushPoint } from "@/clients/influx";
+import type { ContainerMetrics, HostMetrics, Instance, Node } from "@/types";
 
 // Persists what getAllMetrics() already computes (see metrics.ts) into
 // InfluxDB so there's history/dashboarding beyond the live SSE/WS push. Two
@@ -55,7 +55,7 @@ export function trackNodeMetrics(node: Node, host: HostMetrics, runningInstanceC
  * /stop route; the restart events record what the auto-heal did about it. */
 export type InstanceLifecycleEvent = "crash" | "stopped" | "auto_restarted" | "restart_failed";
 
-// The watchdog in clients/docker.ts recovers from these events silently —
+// The watchdog in services/docker/event-listener.ts recovers from these events silently —
 // this point is what makes them observable: the alert engine reads the
 // obs_instance_event measurement for crash / crash-loop / failed-restart
 // rules, so every handler that reacts to a container death must write one.

@@ -12,15 +12,13 @@ export function isPluginPath(rel: string): boolean {
   return rel.startsWith("plugins/");
 }
 
-// The OBS profile (basic/profiles/) holds resolution, fps and encoder/output
-// settings -- all plan-owned. Like plugins, it's sourced only from the plan
-// template folder on every start, never overlaid from the user's obs-configs and
-// never pushed back, so a user can't drift off their plan and a plan change takes
-// effect on next start. service.json (the stream key) lives here too, which is
-// why the key never reaches S3.
-export function isProfilePath(rel: string): boolean {
-  return rel.startsWith("basic/profiles/");
-}
+// The OBS profile (basic/profiles/) is deliberately absent from the allow-list
+// below: it holds resolution, fps and encoder/output settings -- all plan-owned
+// -- and is sourced only from the plan template folder on every start, never
+// overlaid from the user's obs-configs and never pushed back, so a user can't
+// drift off their plan and a plan change takes effect on next start.
+// service.json (the stream key) lives there too, which is why the key never
+// reaches S3.
 
 const ROOT_FILES = new Set(["global.ini", "user.ini"]);
 

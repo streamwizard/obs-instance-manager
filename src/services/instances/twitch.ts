@@ -1,5 +1,5 @@
-import { apiGetStreamKey, type StreamKeyLookup } from "../clients/streamwizard-api";
-import { log } from "../utils/logger";
+import { apiGetStreamKey, type StreamKeyLookup } from "@/clients/streamwizard-api";
+import { log } from "@/utils/logger";
 
 /** The user has not granted StreamWizard their stream key on Twitch. */
 export class StreamKeyNotGrantedError extends Error {

@@ -51,7 +51,7 @@ const send = async (cmd: { constructor: { name: string }; input: any }) => {
   throw new Error(`unexpected command ${cmd.constructor.name}`);
 };
 
-mock.module("../clients/s3", () => ({ s3: { send }, S3_BUCKET: "test-bucket" }));
+mock.module("@/clients/s3", () => ({ s3: { send }, S3_BUCKET: "test-bucket" }));
 
 const {
   pullObsConfig,

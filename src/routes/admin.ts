@@ -1,73 +1,28 @@
-import { randomUUID } from "node:crypto";
-import { Hono, type Context, type Next } from "hono";
-import { deleteInstance, getInstanceByIdAdmin, isAdmin, updateInstance } from "../clients/supabase";
-import { getCachedNodeInstances } from "../services/instance-cache";
-import { getAllMetrics } from "../services/metrics";
-import { clearApiStopping, markApiStopping, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL, removeContainer, stopContainer } from "../clients/docker";
-import { broadcastLifecycle } from "../clients/ws-server";
-import { authMiddleware } from "../middleware/auth";
-import { requireScope } from "../middleware/scope";
-import { isInstanceLocked, withInstanceLock } from "../utils/instance-lock";
-import { upgradeWebSocket } from "../utils/ws";
-import { debug, log } from "../utils/logger";
-import { persistAndRemoveLocalConfig, removeLocalConfig, removeS3Config } from "../services/obs-config";
-import { restartInstance, resolveVncPassword } from "../services/instance-lifecycle";
-import { StreamKeyNotGrantedError } from "../services/twitch";
-import { proxyRoute } from "./instances";
-import { consumeTicket, issueTicket } from "../services/ws-tickets";
-import { KeyedRateLimiter } from "../utils/rate-limit";
-import { STREAM_INTERVAL_MS } from "../utils/constants";
-import type { AppVariables } from "../types";
+import { Hono } from "hono";
+import { getInstanceByIdAdmin } from "@/clients/supabase";
+import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
+import { authMiddleware } from "@/middleware/auth";
+import { requireAdmin } from "@/middleware/require-admin";
+import { requireScope } from "@/middleware/scope";
+import { rateLimitByUser } from "@/middleware/rate-limit";
+import { instanceWsTicketSchema, metricsWsTicketSchema } from "@/schemas/ws-ticket";
+import { issueTicket } from "@/services/auth/ws-tickets";
+import { mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { metricsStreamHandler } from "@/services/metrics/metrics-stream";
+import { proxyRoute } from "@/services/proxy/ws-proxy";
+import { restartInstance } from "@/services/instances/instance-lifecycle";
+import { stopInstance } from "@/services/instances/stop-instance";
+import { destroyInstance } from "@/services/instances/destroy-instance";
+import { StreamKeyNotGrantedError } from "@/services/instances/twitch";
+import { isInstanceLocked } from "@/utils/instance-lock";
+import { KeyedRateLimiter } from "@/utils/rate-limit";
+import type { AppVariables } from "@/types";
 
 const admin = new Hono<{ Variables: AppVariables }>();
 
+// Separate budget from the end-user ws-ticket limiter in routes/instances.ts.
 const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
-
-// Twitch EventSub-style session lifecycle for the metrics stream. The client
-// arms a watchdog from keepalive_timeout_seconds and reconnects if no frame
-// (notification or keepalive) arrives in time -- so a half-open socket is
-// detected instead of silently going stale.
-const KEEPALIVE_TIMEOUT_SECONDS = 10;
-const KEEPALIVE_INTERVAL_MS = 8000;
-
-interface MetricsSocket {
-  send: (data: string) => void;
-}
-
-const metricsSockets = new Set<MetricsSocket>();
-
-// Called from index.ts on shutdown: tell every connected metrics client to
-// reconnect (mint a fresh ticket and re-dial) before the process exits, so a
-// node drain/redeploy doesn't surface as a dropped stream. Mirrors Twitch
-// EventSub's session_reconnect.
-export function notifyMetricsDrain(reconnectUrl: string) {
-  const message = JSON.stringify({ type: "session_reconnect", session: { reconnect_url: reconnectUrl } });
-  for (const ws of metricsSockets) {
-    try {
-      ws.send(message);
-    } catch {
-      // best-effort; the socket may already be tearing down
-    }
-  }
-}
-
-// Same auth every end-user route uses (authMiddleware) -- the only
-// difference here is the authorization check is "has the admin role"
-// instead of "owns this instance". A node token must also say role "admin",
-// which only web-admin signs, after its own strong-session check.
-async function requireAdmin(c: Context<{ Variables: AppVariables }>, next: Next) {
-  const userId = c.get("userId");
-  const nodeToken = c.get("nodeToken");
-  if (nodeToken && nodeToken.role !== "admin") {
-    debug("auth", `node token for ${userId} is not an admin token, rejecting ${c.req.path}`);
-    return c.json({ error: "Forbidden" }, 403);
-  }
-  if (!(await isAdmin(userId))) {
-    debug("auth", `user ${userId} is not an admin, rejecting ${c.req.path}`);
-    return c.json({ error: "Forbidden" }, 403);
-  }
-  await next();
-}
+const wsTicketRateLimit = rateLimitByUser(wsTicketLimiter, "Too many ticket requests, try again later");
 
 // WS upgrades (metrics/novnc/obsws) authenticate via single-use ws-tickets
 // consumed in their handlers, NOT the JWT middleware below -- browsers can't
@@ -75,71 +30,7 @@ async function requireAdmin(c: Context<{ Variables: AppVariables }>, next: Next)
 // so the upgrade handler runs first and the JWT/admin check is skipped for
 // them, while every REST route still goes through it. The admin role was
 // already enforced at mint time (POST /admin/.../ws-ticket).
-
-// Node-wide metrics for every instance on this node, wrapped in a Twitch-style
-// session envelope (welcome -> notification frames, with keepalives).
-admin.get(
-  "/metrics/stream",
-  upgradeWebSocket((c) => {
-    const ticket = consumeTicket(c.req.query("ticket"), "metrics");
-    let interval: ReturnType<typeof setInterval> | null = null;
-    let keepalive: ReturnType<typeof setInterval> | null = null;
-    let lastSendAt = 0;
-    let registered: MetricsSocket | null = null;
-
-    const send = (ws: MetricsSocket, message: unknown) => {
-      ws.send(JSON.stringify(message));
-      lastSendAt = Date.now();
-    };
-
-    const sendMetrics = async (ws: MetricsSocket) => {
-      // Cached: admin start/stop/delete invalidate it, so a state change this
-      // process made is visible on the next 3s tick — same as when this
-      // fetched live, minus the rest-api round trip per tick per socket.
-      const nodeInstances = await getCachedNodeInstances();
-      const payload = await getAllMetrics(nodeInstances);
-      send(ws, { type: "notification", payload });
-      debug("ws", `metrics/stream sent payload for ${nodeInstances.length} instance(s)`);
-    };
-
-    return {
-      onOpen(_event, ws) {
-        if (!ticket) {
-          ws.close(4401, "Invalid ticket");
-          return;
-        }
-        debug("ws", "metrics/stream client connected");
-        registered = ws;
-        metricsSockets.add(ws);
-
-        send(ws, {
-          type: "session_welcome",
-          session: { id: randomUUID(), keepalive_timeout_seconds: KEEPALIVE_TIMEOUT_SECONDS },
-        });
-
-        sendMetrics(ws).catch((err) => debug("ws", "metrics/stream send failed", err));
-        interval = setInterval(() => {
-          sendMetrics(ws).catch((err) => debug("ws", "metrics/stream send failed", err));
-        }, STREAM_INTERVAL_MS);
-
-        // Only emits if metric generation has stalled long enough that the
-        // client would otherwise trip its watchdog.
-        keepalive = setInterval(() => {
-          if (Date.now() - lastSendAt >= KEEPALIVE_INTERVAL_MS) {
-            send(ws, { type: "session_keepalive" });
-          }
-        }, KEEPALIVE_INTERVAL_MS);
-      },
-      onClose() {
-        debug("ws", "metrics/stream client disconnected");
-        if (interval) clearInterval(interval);
-        if (keepalive) clearInterval(keepalive);
-        if (registered) metricsSockets.delete(registered);
-      },
-    };
-  })
-);
-
+admin.get("/metrics/stream", metricsStreamHandler);
 admin.get("/instances/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, "novnc", (id) => getInstanceByIdAdmin(id)));
 admin.get("/instances/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id) => getInstanceByIdAdmin(id)));
 
@@ -148,14 +39,11 @@ admin.use("*", authMiddleware, requireAdmin);
 // Mints the single-use ws-tickets the browser puts on the WS URL. Admin role
 // is enforced here (via requireAdmin) while the real credential is still in
 // the Authorization header -- it never rides on the socket.
-admin.post("/ws-ticket", requireScope("admin:ws-ticket"), async (c) => {
+admin.post("/ws-ticket", requireScope("admin:ws-ticket"), wsTicketRateLimit, async (c) => {
   const userId = c.get("userId") as string;
-  if (!wsTicketLimiter.allow(userId)) {
-    return c.json({ error: "Too many ticket requests, try again later" }, 429);
-  }
 
-  const body = await c.req.json<{ scope?: string }>().catch(() => ({}) as { scope?: string });
-  if (body.scope !== "metrics") {
+  const parsed = metricsWsTicketSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
     return c.json({ error: "Invalid scope" }, 400);
   }
 
@@ -163,40 +51,25 @@ admin.post("/ws-ticket", requireScope("admin:ws-ticket"), async (c) => {
   return c.json({ ticket, expires_in: 30 });
 });
 
-admin.post("/instances/:id/ws-ticket", requireScope("admin:ws-ticket"), async (c) => {
+admin.post("/instances/:id/ws-ticket", requireScope("admin:ws-ticket"), wsTicketRateLimit, async (c) => {
   const userId = c.get("userId") as string;
   const id = c.req.param("id");
 
-  if (!wsTicketLimiter.allow(userId)) {
-    return c.json({ error: "Too many ticket requests, try again later" }, 429);
-  }
-
-  const body = await c.req.json<{ scope?: string }>().catch(() => ({}) as { scope?: string });
-  const scope = body.scope;
-  if (scope !== "novnc" && scope !== "obsws") {
+  const parsed = instanceWsTicketSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
     return c.json({ error: "Invalid scope" }, 400);
   }
 
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-  const ticket = issueTicket({ userId, scope, instanceId: id });
-
-  // See the matching comment in routes/instances.ts's ws-ticket handler --
-  // the browser's VNC client needs this to complete the RFB auth handshake
-  // with x11vnc itself, since the WS proxy is a blind byte relay.
-  if (scope === "novnc") {
-    const vncPassword = await resolveVncPassword(instance);
-    return c.json({ ticket, expires_in: 30, vnc_password: vncPassword });
-  }
-
-  return c.json({ ticket, expires_in: 30 });
+  return c.json(await mintInstanceTicket(userId, instance, parsed.data.scope));
 });
 
-// Admin-scoped start/stop -- same docker actions as the end-user
-// /instances/:id/start|stop routes, but looked up without an owning-user
-// filter since the caller's authority here comes from the admin role check,
-// not instance ownership.
+// Admin-scoped start/stop/delete -- same flows as the end-user
+// /instances/:id/* routes, but looked up without an owning-user filter since
+// the caller's authority here comes from the admin role check, not instance
+// ownership.
 admin.post("/instances/:id/start", requireScope("admin:instances"), async (c) => {
   const id = c.req.param("id");
 
@@ -221,29 +94,7 @@ admin.post("/instances/:id/stop", requireScope("admin:instances"), async (c) => 
   if (!instance) return c.json({ error: "Instance not found" }, 404);
   if (!instance.container_id) return c.json({ error: "Instance has no container" }, 400);
 
-  const updated = await withInstanceLock(id, async () => {
-    const containerId = instance.container_id as string;
-    markApiStopping(containerId);
-    // Leading-edge signal: deliberate stop. Other devices show "Stopping…".
-    broadcastLifecycle(instance.user_id, id, "stopping");
-    try {
-      await stopContainer(containerId);
-
-      await persistAndRemoveLocalConfig(instance.user_id, instance.id);
-
-      await removeContainer(containerId).catch((e) =>
-        debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-      );
-
-      const result = await updateInstance(id, { container_id: null, status: "stopped" });
-      broadcastLifecycle(instance.user_id, id, "stopped");
-      return result;
-    } finally {
-      clearApiStopping(containerId);
-    }
-  });
-
-  return c.json(updated);
+  return c.json(await stopInstance(instance));
 });
 
 admin.delete("/instances/:id", requireScope("admin:instances"), async (c) => {
@@ -252,39 +103,7 @@ admin.delete("/instances/:id", requireScope("admin:instances"), async (c) => {
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-  await withInstanceLock(id, async () => {
-    if (instance.container_id) {
-      const containerId = instance.container_id;
-      markApiStopping(containerId);
-      try {
-        await stopContainer(containerId).catch((e) =>
-          debug("docker", `stop failed for ${id}: ${(e as Error).message}`)
-        );
-
-        // No push: the S3 prefix is removed right below.
-        await removeLocalConfig(instance.id).catch((e) =>
-          log("warn", "failed to remove local config dir before delete", {
-            instanceId: instance.id,
-            error: (e as Error).message,
-          })
-        );
-
-        await removeContainer(containerId).catch((e) =>
-          debug("docker", `remove failed for ${id}: ${(e as Error).message}`)
-        );
-      } finally {
-        clearApiStopping(containerId);
-      }
-    }
-
-    await removeS3Config(instance.user_id, instance.id).catch((e) =>
-      log("warn", "S3 config removal failed", { instanceId: instance.id, error: (e as Error).message })
-    );
-
-    await deleteInstance(id);
-    broadcastLifecycle(instance.user_id, id, "deleted");
-  });
-
+  await destroyInstance(instance);
   return c.json({ success: true });
 });
 

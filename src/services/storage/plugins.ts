@@ -1,9 +1,9 @@
 import { lstat, mkdir, readdir, rm, rmdir } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { log } from "../utils/logger";
-import { mapLimit } from "../utils/concurrency";
-import { S3_SYNC_CONCURRENCY } from "../utils/constants";
-import { downloadToFile, listObjects } from "./s3-objects";
+import { log } from "@/utils/logger";
+import { mapLimit } from "@/utils/concurrency";
+import { S3_SYNC_CONCURRENCY } from "@/utils/constants";
+import { downloadToFile, listObjects } from "@/services/storage/s3-objects";
 
 const PLUGINS_PREFIX = "plugins/";
 

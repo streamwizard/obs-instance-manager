@@ -1,7 +1,7 @@
 // User media file-manager for a running instance's /home/app/media mount.
 //
 // All operations are scoped to localMediaDir(instanceId) -- the same host dir
-// that docker.ts bind-mounts to /home/app/media and that obs-config.ts syncs
+// that clients/docker.ts bind-mounts to /home/app/media and that obs-config/ syncs
 // to S3. Each mutation syncs just its own key. This service only ever touches files
 // while the instance is running (the caller guards on status); on stop the
 // existing lifecycle pushes to S3 and removes the local dir.
@@ -9,19 +9,21 @@
 // Every mutation runs under withInstanceLock so an upload/rename/delete can
 // never interleave with a stop's final push + removeLocalConfig, which would
 // otherwise write into (or read from) a half-deleted tree.
-import { chown, lstat, mkdir, readdir, realpath, rename, rm } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
-import { deleteObsMediaFile, localMediaDir, moveObsMediaFile, pushObsMediaFile } from "./obs-config";
-import { updateInstance } from "../clients/supabase";
-import { withInstanceLock } from "../utils/instance-lock";
-import { OBS_MEDIA_MAX_FILE_BYTES } from "../utils/constants";
+import { chown, lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { deleteObsMediaFile, localMediaDir, moveObsMediaFile, pushObsMediaFile } from "@/services/storage/obs-config";
+import { updateInstance } from "@/clients/supabase";
+import { withInstanceLock } from "@/utils/instance-lock";
+import { OBS_MEDIA_MAX_FILE_BYTES } from "@/utils/constants";
 import {
   contentMatchesExtension,
   extensionOf,
   isAllowedExtension,
   MEDIA_SNIFF_BYTES,
-} from "../utils/media-types";
-import { debug, log } from "../utils/logger";
+} from "@/utils/media-types";
+import { debug, log } from "@/utils/logger";
+import { MediaError } from "@/services/storage/media-error";
+import { resolveSafe, toRel } from "@/services/storage/media-paths";
 
 // OBS runs as uid/gid 1000 inside the container (obs-cloud-container Dockerfile).
 // The manager process runs as root, so files it writes land root-owned; chown
@@ -29,15 +31,6 @@ import { debug, log } from "../utils/logger";
 // isn't root, world-readable default perms still let OBS read.
 const OBS_UID = 1000;
 const OBS_GID = 1000;
-
-export class MediaError extends Error {
-  constructor(
-    message: string,
-    readonly status: 400 | 404 | 409 | 413,
-  ) {
-    super(message);
-  }
-}
 
 export interface MediaFile {
   path: string; // relative to the media root, forward-slashed
@@ -51,64 +44,6 @@ export interface MediaListing {
   quota_bytes: number;
 }
 
-// SECURITY: the media dir is a bind mount the OBS container writes to, so the
-// (semi-trusted) container can plant symlinks inside it. The manager runs as
-// root, so a lexical-only path check lets an intermediate symlink (e.g.
-// media/x -> /) redirect a write/delete/read outside the media root -- a
-// container escape / cross-instance / host-overwrite. So resolution is NOT
-// purely lexical:
-//   1. Lexically reject absolute paths, "..", ".", empty segments, null bytes.
-//   2. Anchor at realpath(base) -- the mount root itself is root-owned and not
-//      container-replaceable.
-//   3. Walk every path component and reject if any existing component is a
-//      symlink (intermediate or final). Writers additionally use temp-file +
-//      rename (see uploadFile) so a symlink raced onto the destination is
-//      replaced, never followed.
-// Residual TOCTOU (container swaps a verified dir for a symlink between check
-// and open) is extremely narrow given the per-instance single-writer lock and
-// the temp+rename write path; fully closing it would need openat2(RESOLVE_-
-// BENEATH), which Bun does not expose.
-function lexicalClean(relPath: string): string {
-  // Reject control chars (incl. NUL, CR, LF) up front: they have no place in a
-  // filename and would otherwise ride through to headers (Content-Disposition)
-  // as a CRLF-injection vector, or confuse the filesystem.
-  if (!relPath || /[\x00-\x1f\x7f]/.test(relPath)) {
-    throw new MediaError("Invalid file path", 400);
-  }
-  const cleaned = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
-  const parts = cleaned.split("/");
-  if (parts.some((p) => p === "" || p === "." || p === "..")) {
-    throw new MediaError("Invalid file path", 400);
-  }
-  return cleaned;
-}
-
-// Resolves relPath under base, guaranteeing no symlink is traversed. `base` is
-// created first so realpath() succeeds and anchors us at the real mount root.
-async function resolveSafe(base: string, relPath: string): Promise<string> {
-  const cleaned = lexicalClean(relPath);
-  await mkdir(base, { recursive: true });
-  const realBase = await realpath(base);
-
-  let cur = realBase;
-  const parts = cleaned.split("/");
-  for (let i = 0; i < parts.length; i++) {
-    cur = join(cur, parts[i]!);
-    const st = await lstat(cur).catch(() => null);
-    if (st?.isSymbolicLink()) {
-      throw new MediaError("Symlinked paths are not allowed", 400);
-    }
-    // Intermediate components that exist must be real directories.
-    if (i < parts.length - 1 && st && !st.isDirectory()) {
-      throw new MediaError("Invalid file path", 400);
-    }
-  }
-  return cur;
-}
-
-function toRel(base: string, abs: string): string {
-  return relative(base, abs).split(sep).join("/");
-}
 
 // Recursively walks the media dir, returning real files only (lstat guards
 // against a symlink planted by the container pointing at host files).

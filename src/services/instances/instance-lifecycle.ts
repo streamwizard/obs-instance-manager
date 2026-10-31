@@ -1,19 +1,19 @@
 // Shared "bring this instance's container up" flow, used by the end-user
 // POST /:id/start route, the admin POST /instances/:id/start route, and
 // boot-time/event-driven recovery (reconcileContainers, gpu-xserver restart
-// handling in docker.ts) -- previously this logic was duplicated between
+// handling in services/docker/) -- previously this logic was duplicated between
 // instances.ts and admin.ts, which had already drifted (admin.ts's copy was
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
-import { createContainer, findContainerByName, removeContainer, startContainer } from "../clients/docker";
-import { updateInstance } from "../clients/supabase";
-import { broadcastLifecycle } from "../clients/ws-server";
-import { decryptPassword, encryptPassword, generateVncPassword } from "../utils/crypto";
-import { debug, log } from "../utils/logger";
-import { withInstanceLock } from "../utils/instance-lock";
-import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "./obs-config";
-import { syncPlugins } from "./plugins";
-import { requireStreamKey } from "./twitch";
-import type { Instance } from "../types";
+import { createContainer, findContainerByName, removeContainer, startContainer } from "@/clients/docker";
+import { updateInstance } from "@/clients/supabase";
+import { broadcastLifecycle } from "@/clients/ws-server";
+import { decryptPassword, encryptPassword, generateVncPassword } from "@/utils/crypto";
+import { debug, log } from "@/utils/logger";
+import { withInstanceLock } from "@/utils/instance-lock";
+import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "@/services/storage/obs-config";
+import { syncPlugins } from "@/services/storage/plugins";
+import { requireStreamKey } from "@/services/instances/twitch";
+import type { Instance } from "@/types";
 
 export class InstanceLifecycleError extends Error {}
 

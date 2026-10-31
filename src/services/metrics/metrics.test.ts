@@ -10,7 +10,7 @@ process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
 
-const { parseNvidiaSmiGpuRow } = await import("./metrics");
+const { parseNvidiaSmiGpuRow } = await import("./nvidia-smi");
 
 // Field order: name, memory.used, memory.total, utilization.gpu,
 // utilization.memory, encoder.stats.averageFps, encoder.stats.sessionCount,

@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Hono } from "hono";
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
-import type { AppVariables, Node } from "../types";
+import type { AppVariables, Node } from "@/types";
 
 process.env.SUPABASE_URL ??= "http://127.0.0.1:1";
 process.env.NODE_ID ??= "node-a";
@@ -32,7 +32,7 @@ function node(keys: JWK[]): Node {
 // The node row is the only source of public keys, so mocking the cache is
 // mocking the key delivery: getCachedNode is the warm copy, refreshNode the
 // live /me read a rotation needs.
-mock.module("../services/node-cache", () => ({
+mock.module("@/services/cache/node-cache", () => ({
   getCachedNode: async () => node(cachedKeys),
   refreshNode: async () => {
     refreshCalls++;
@@ -43,7 +43,7 @@ mock.module("../services/node-cache", () => ({
 
 const { authMiddleware } = await import("./auth");
 const { requireScope } = await import("./scope");
-const { resetNodeTokenState } = await import("../services/node-token");
+const { resetNodeTokenState } = await import("@/services/auth/node-token");
 
 const app = new Hono<{ Variables: AppVariables }>();
 app.use("*", authMiddleware);

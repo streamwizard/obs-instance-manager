@@ -68,7 +68,7 @@ mock.module("obs-websocket-js", () => ({
 
 // --- other collaborators ----------------------------------------------------
 const broadcasts: Array<{ userId: string; instanceId: string; sceneName: string; sceneUuid: string }> = [];
-mock.module("../clients/ws-server", () => ({
+mock.module("@/clients/ws-server", () => ({
   broadcastSceneChanged: (userId: string, instanceId: string, sceneName: string, sceneUuid: string) => {
     broadcasts.push({ userId, instanceId, sceneName, sceneUuid });
   },
@@ -79,7 +79,7 @@ let nodeInstances: unknown[] = [];
 const unused = () => {
   throw new Error("not stubbed");
 };
-mock.module("../clients/supabase", () => ({
+mock.module("@/clients/supabase", () => ({
   listNodeInstances: async () => nodeInstances,
   getInstanceByIdAdmin: unused,
   isAdmin: unused,
@@ -96,14 +96,14 @@ mock.module("../clients/supabase", () => ({
 
 // Only instanceTarget/OBS_WS_PORT_INTERNAL are used, and importing the real
 // module would construct a dockerode client against /var/run/docker.sock.
-mock.module("../clients/docker", () => ({
+mock.module("@/clients/docker", () => ({
   instanceTarget: (containerName: string, port: number) => `${containerName}:${port}`,
   OBS_WS_PORT_INTERNAL: 4455,
 }));
 
 // Encrypted-password fields are passed straight to decryptPassword; stub it so
 // the tests don't need real AES material.
-mock.module("../utils/crypto", () => ({
+mock.module("@/utils/crypto", () => ({
   decryptPassword: () => "secret",
 }));
 

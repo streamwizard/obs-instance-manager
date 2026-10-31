@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { describe, expect, it, mock } from "bun:test";
-import type { Node } from "../types";
+import type { Node } from "@/types";
 
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
@@ -40,7 +40,7 @@ let failWith: Error | null = null;
 
 // Mock the cache, not the client — the point of these tests is WHICH cache
 // entry point command-key reaches for.
-mock.module("./node-cache", () => ({
+mock.module("@/services/cache/node-cache", () => ({
   refreshNode: async () => {
     refreshCalls++;
     if (failWith) throw failWith;

@@ -25,13 +25,13 @@ class StreamKeyNotGrantedError extends Error {
   readonly code = "stream_key_not_granted";
 }
 
-mock.module("../middleware/auth", () => ({
+mock.module("@/middleware/auth", () => ({
   authMiddleware: async (c: any, next: any) => {
     c.set("userId", "user-1");
     await next();
   },
 }));
-mock.module("../clients/supabase", () => ({
+mock.module("@/clients/supabase", () => ({
   countActiveInstances: async () => 0,
   getSubscriptionLimits: async () => ({
     resolution: "1920x1080",
@@ -52,18 +52,18 @@ mock.module("../clients/supabase", () => ({
   getInstanceById: async () => null,
   listUserInstances: async () => [],
 }));
-mock.module("../services/node-cache", () => ({
+mock.module("@/services/cache/node-cache", () => ({
   refreshNode: async () => ({ id: "node-1", max_instances: 10, max_encoder_sessions: null }),
   getCachedNode: async () => ({ id: "node-1", max_instances: 10, max_encoder_sessions: null }),
 }));
-mock.module("../services/twitch", () => ({
+mock.module("@/services/instances/twitch", () => ({
   StreamKeyNotGrantedError,
   requireStreamKey: async () => {
     if (keyRefused) throw new StreamKeyNotGrantedError("Connect Twitch first");
     return "live_key";
   },
 }));
-mock.module("../clients/docker", () => ({
+mock.module("@/clients/docker", () => ({
   createContainer: async () => {
     calls.createContainer++;
     return "container-1";
@@ -78,12 +78,12 @@ mock.module("../clients/docker", () => ({
   NOVNC_PORT_INTERNAL: 6080,
   OBS_WS_PORT_INTERNAL: 4455,
 }));
-mock.module("../clients/ws-server", () => ({
+mock.module("@/clients/ws-server", () => ({
   broadcastLifecycle: (_u: string, _i: string, action: string) => {
     calls.lifecycle.push(action);
   },
 }));
-mock.module("../services/obs-config", () => ({
+mock.module("@/services/storage/obs-config", () => ({
   pullObsConfig: async () => {},
   pushObsConfig: async () => {},
   persistAndRemoveLocalConfig: async () => true,
@@ -93,8 +93,8 @@ mock.module("../services/obs-config", () => ({
   clearStreamKey: async () => {},
   injectObsWsPassword: async () => {},
 }));
-mock.module("../services/plugins", () => ({ syncPlugins: async () => {} }));
-mock.module("../services/instance-lifecycle", () => ({
+mock.module("@/services/storage/plugins", () => ({ syncPlugins: async () => {} }));
+mock.module("@/services/instances/instance-lifecycle", () => ({
   restartInstance: async () => {
     throw new Error("not stubbed");
   },

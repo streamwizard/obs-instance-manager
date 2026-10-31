@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { Node } from "../types";
+import type { Node } from "@/types";
 
 // Import-time env, before anything pulls in the module graph.
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
@@ -40,7 +40,7 @@ let nextNode: Node = makeNode();
 let failWith: Error | null = null;
 let delayMs = 0;
 
-mock.module("../clients/supabase", () => ({
+mock.module("@/clients/supabase", () => ({
   getNode: async () => {
     calls++;
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));

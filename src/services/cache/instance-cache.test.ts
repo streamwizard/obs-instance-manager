@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { Instance } from "../types";
+import type { Instance } from "@/types";
 
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
@@ -32,7 +32,7 @@ let listCalls = 0;
 let nextList: Instance[] = [makeInstance("a")];
 let failWith: Error | null = null;
 
-mock.module("../clients/supabase", () => ({
+mock.module("@/clients/supabase", () => ({
   listNodeInstances: async () => {
     listCalls++;
     if (failWith) throw failWith;

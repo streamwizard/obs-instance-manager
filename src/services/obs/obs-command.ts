@@ -1,8 +1,8 @@
 import OBSWebSocket from "obs-websocket-js";
-import { instanceTarget, OBS_WS_PORT_INTERNAL } from "../clients/docker";
-import { decryptPassword } from "../utils/crypto";
-import { debug, log } from "../utils/logger";
-import type { Instance } from "../types";
+import { instanceTarget, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
+import { decryptPassword } from "@/utils/crypto";
+import { debug, log } from "@/utils/logger";
+import type { Instance } from "@/types";
 
 // Only the requests the auto-switcher needs. Everything else is rejected
 // even though the caller is trusted — the blast radius of a leaked service

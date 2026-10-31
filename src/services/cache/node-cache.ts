@@ -1,7 +1,7 @@
-import { getNode } from "../clients/supabase";
-import { NODE_ID } from "../utils/node";
-import { log } from "../utils/logger";
-import type { Node } from "../types";
+import { getNode } from "@/clients/supabase";
+import { NODE_ID } from "@/utils/node";
+import { log } from "@/utils/logger";
+import type { Node } from "@/types";
 
 // This node's own row, held in memory.
 //
@@ -23,7 +23,7 @@ import type { Node } from "../types";
 /** An hour, and that is not casual: the row is write-once in practice (25 days
  *  without an UPDATE across ~440k reads, verified via its updated_at trigger),
  *  and every path that needs a *correct* row rather than a recent one — the
- *  capacity gate in routes/instances.ts and command-key rotation — goes through
+ *  capacity gate in services/instances/create-instance.ts and command-key rotation — goes through
  *  refreshNode(), which bypasses this TTL entirely. The only thing the TTL
  *  bounds is how long an admin's capacity edit takes to reach Influx tags, a
  *  human-rare event where an hour of lag is invisible. */

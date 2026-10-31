@@ -30,7 +30,7 @@ const calls = {
   lifecycle: [] as string[],
 };
 
-mock.module("../clients/docker", () => ({
+mock.module("@/clients/docker", () => ({
   findContainerByName: async () => (probeQueue.length ? probeQueue.shift()! : existing),
   createContainer: async () => {
     calls.createContainer++;
@@ -44,23 +44,23 @@ mock.module("../clients/docker", () => ({
     calls.removeContainer.push(id);
   },
 }));
-mock.module("../clients/supabase", () => ({
+mock.module("@/clients/supabase", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => {
     calls.updates.push(patch);
     return { ...instance, ...patch };
   },
 }));
-mock.module("../clients/ws-server", () => ({
+mock.module("@/clients/ws-server", () => ({
   broadcastLifecycle: (_u: string, _i: string, action: string) => {
     calls.lifecycle.push(action);
   },
 }));
-mock.module("../utils/crypto", () => ({
+mock.module("@/utils/crypto", () => ({
   decryptPassword: () => "obs-pw",
   encryptPassword: () => ({ ciphertext: "c", iv: "i", tag: "t" }),
   generateVncPassword: () => "vnc-pw",
 }));
-mock.module("./obs-config", () => ({
+mock.module("@/services/storage/obs-config", () => ({
   pullObsConfig: async () => {
     calls.pullObsConfig++;
   },
@@ -69,7 +69,7 @@ mock.module("./obs-config", () => ({
   },
   injectStreamKey: async () => {},
 }));
-mock.module("./plugins", () => ({ syncPlugins: async () => {} }));
+mock.module("@/services/storage/plugins", () => ({ syncPlugins: async () => {} }));
 // Both names so the stub matches main (getStreamKey) and the stream-key-scope
 // branch (requireStreamKey) without a rebase-time edit.
 let streamKeyError: Error | null = null;
@@ -83,7 +83,7 @@ mock.module("./twitch", () => ({
 }));
 
 const { restartInstance } = await import("./instance-lifecycle");
-const { isInstanceLocked } = await import("../utils/instance-lock");
+const { isInstanceLocked } = await import("@/utils/instance-lock");
 
 const instance = {
   id: "inst-1",

@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "crypto";
-import { refreshNode } from "./node-cache";
-import { debug, log } from "../utils/logger";
+import { refreshNode } from "@/services/cache/node-cache";
+import { debug, log } from "@/utils/logger";
 
 // The obs-auto-switcher authenticates to the public /obs route with this node's
 // per-node command key. The rest-api hands us only its SHA-256 hash (via

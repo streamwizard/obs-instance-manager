@@ -1,6 +1,6 @@
 import axios from "axios";
-import { debug, log } from "../utils/logger";
-import type { CloudObsPlanLimits, Instance, Node } from "../types";
+import { debug, log } from "@/utils/logger";
+import type { CloudObsPlanLimits, Instance, Node } from "@/types";
 
 const apiUrl = process.env.REST_API_URL;
 const nodeApiKey = process.env.NODE_API_KEY;

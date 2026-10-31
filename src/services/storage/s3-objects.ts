@@ -8,9 +8,9 @@ import {
 import { Upload } from "@aws-sdk/lib-storage";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { s3, S3_BUCKET } from "../clients/s3";
+import { s3, S3_BUCKET } from "@/clients/s3";
 
-// Object-level helpers shared by the config/media sync (obs-config.ts) and the
+// Object-level helpers shared by the config/media sync (obs-config/) and the
 // plugin mirror (plugins.ts). Everything here streams: files are never held in
 // memory whole, except small ones where a single buffered PUT is cheaper.
 

@@ -1,7 +1,7 @@
-import { listNodeInstances } from "../clients/supabase";
-import { NODE_ID } from "../utils/node";
-import { log } from "../utils/logger";
-import type { Instance } from "../types";
+import { listNodeInstances } from "@/clients/supabase";
+import { NODE_ID } from "@/utils/node";
+import { log } from "@/utils/logger";
+import type { Instance } from "@/types";
 
 // This node's instance list, held in memory.
 //
