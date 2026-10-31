@@ -51,6 +51,7 @@ mock.module("../clients/supabase", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => ({ ...calls.insert[0], ...patch }),
   getInstanceById: async () => null,
   listUserInstances: async () => [],
+  canInteractCloudObs: async () => true,
 }));
 mock.module("../services/node-cache", () => ({
   refreshNode: async () => ({ id: "node-1", max_instances: 10, max_encoder_sessions: null }),
@@ -99,6 +100,9 @@ mock.module("../services/instance-lifecycle", () => ({
     throw new Error("not stubbed");
   },
   resolveVncPassword: async () => "vnc",
+  stopInstance: async () => {
+    throw new Error("not stubbed");
+  },
 }));
 
 const { default: instances } = await import("./instances");

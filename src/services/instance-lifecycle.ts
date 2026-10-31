@@ -4,13 +4,21 @@
 // handling in docker.ts) -- previously this logic was duplicated between
 // instances.ts and admin.ts, which had already drifted (admin.ts's copy was
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
-import { createContainer, findContainerByName, removeContainer, startContainer } from "../clients/docker";
+import {
+  clearApiStopping,
+  createContainer,
+  findContainerByName,
+  markApiStopping,
+  removeContainer,
+  startContainer,
+  stopContainer,
+} from "../clients/docker";
 import { updateInstance } from "../clients/supabase";
 import { broadcastLifecycle } from "../clients/ws-server";
 import { decryptPassword, encryptPassword, generateVncPassword } from "../utils/crypto";
 import { debug, log } from "../utils/logger";
 import { withInstanceLock } from "../utils/instance-lock";
-import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "./obs-config";
+import { clearStreamKey, pullObsConfig, injectObsWsPassword, injectStreamKey, persistAndRemoveLocalConfig } from "./obs-config";
 import { syncPlugins } from "./plugins";
 import { requireStreamKey } from "./twitch";
 import type { Instance } from "../types";
@@ -173,4 +181,37 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
     broadcastLifecycle(instance.user_id, instance.id, "error");
     throw err;
   }
+}
+
+// Shared deliberate stop: the end-user and admin POST .../stop routes and the
+// plan sweep (services/plan-sweep.ts). The stream key comes out of the config
+// before it's pushed to S3, so a stored profile never carries it. The admin
+// route used to skip that step.
+export async function stopInstance(instance: Instance & { container_id: string }): Promise<Instance> {
+  return withInstanceLock(instance.id, async () => {
+    const containerId = instance.container_id;
+    markApiStopping(containerId);
+    // Leading-edge signal: this stop is deliberate. Lets other devices show
+    // "Stopping…" instead of reading the imminent socket drop as a blip.
+    broadcastLifecycle(instance.user_id, instance.id, "stopping");
+    try {
+      await stopContainer(containerId);
+
+      await clearStreamKey(instance.id).catch((e) =>
+        log("warn", "failed to clear stream key before push", { instanceId: instance.id, error: (e as Error).message })
+      );
+
+      await persistAndRemoveLocalConfig(instance.user_id, instance.id);
+
+      await removeContainer(containerId).catch((e) =>
+        debug("docker", `remove failed for ${instance.id}: ${(e as Error).message}`)
+      );
+
+      const result = await updateInstance(instance.id, { container_id: null, status: "stopped" });
+      broadcastLifecycle(instance.user_id, instance.id, "stopped");
+      return result;
+    } finally {
+      clearApiStopping(containerId);
+    }
+  });
 }
