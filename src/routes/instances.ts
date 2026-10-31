@@ -336,7 +336,7 @@ instances.post("/", requireScope("instances:create"), async (c) => {
     vnc_password_ciphertext: encryptedVncPassword.ciphertext,
     vnc_password_iv: encryptedVncPassword.iv,
     vnc_password_tag: encryptedVncPassword.tag,
-  });
+  }, c.get("nodeTokenRaw") ?? null);
 
   // After the row insert, not before: rest-api only releases a user's stream
   // key to a node that already hosts an instance for them (403 otherwise), so

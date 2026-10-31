@@ -53,8 +53,9 @@ export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance
 
 export async function insertInstance(
   instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+  nodeToken: string | null,
 ): Promise<Instance> {
-  const created = await apiInsertInstance(instance);
+  const created = await apiInsertInstance(instance, nodeToken);
   invalidateNodeInstances();
   return created;
 }
