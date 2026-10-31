@@ -15,6 +15,7 @@ process.env.NODE_API_KEY ??= "test";
 // after insertInstance, and a refusal must remove the row again.
 const calls = {
   insert: [] as Record<string, unknown>[],
+  insertToken: [] as (string | null)[],
   delete: [] as string[],
   createContainer: 0,
   lifecycle: [] as string[],
@@ -28,6 +29,7 @@ class StreamKeyNotGrantedError extends Error {
 mock.module("../middleware/auth", () => ({
   authMiddleware: async (c: any, next: any) => {
     c.set("userId", "user-1");
+    c.set("nodeTokenRaw", "node-token-for-user-1");
     await next();
   },
 }));
@@ -41,8 +43,9 @@ mock.module("../clients/supabase", () => ({
     shm_size: "2g",
     config_template: "1080p30",
   }),
-  insertInstance: async (row: Record<string, unknown>) => {
+  insertInstance: async (row: Record<string, unknown>, nodeToken: string | null) => {
     calls.insert.push(row);
+    calls.insertToken.push(nodeToken);
     return row;
   },
   deleteInstance: async (id: string) => {
@@ -122,6 +125,7 @@ function createRequest() {
 
 beforeEach(() => {
   calls.insert = [];
+  calls.insertToken = [];
   calls.delete = [];
   calls.createContainer = 0;
   calls.lifecycle = [];
@@ -147,4 +151,10 @@ test("stream key refused: 409, the just-inserted row is removed, nothing boots",
   expect(calls.delete).toEqual([calls.insert[0]?.id]);
   expect(calls.createContainer).toBe(0);
   expect(calls.lifecycle).toEqual([]);
+});
+
+test("the user's node token is forwarded with the insert", async () => {
+  const res = await makeApp().request(createRequest());
+  expect(res.status).toBe(201);
+  expect(calls.insertToken).toEqual(["node-token-for-user-1"]);
 });

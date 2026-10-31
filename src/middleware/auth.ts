@@ -56,6 +56,7 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
       debug("auth", `verified node token for sub=${claims.userId} scope=${claims.scope} on ${c.req.path}`);
       c.set("userId", claims.userId);
       c.set("nodeToken", claims);
+      c.set("nodeTokenRaw", token);
     } catch (err) {
       debug("auth", `node token rejected on ${c.req.path}`, err instanceof Error ? err.message : err);
       return c.json({ error: "Invalid or expired token" }, 401);
@@ -80,5 +81,6 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
 
   c.set("userId", userId);
   c.set("nodeToken", null);
+  c.set("nodeTokenRaw", null);
   await next();
 }

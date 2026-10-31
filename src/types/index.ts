@@ -135,5 +135,8 @@ export interface AppVariables {
   // Set when the caller presented a node token. null for the legacy Supabase
   // session JWT, which carries no scope -- see middleware/auth.ts.
   nodeToken: NodeTokenClaims | null;
+  // The node token itself, for the one route that forwards it (POST
+  // /instances, to rest-api). null whenever nodeToken is.
+  nodeTokenRaw: string | null;
 }
 

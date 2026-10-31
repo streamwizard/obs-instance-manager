@@ -81,10 +81,17 @@ export async function apiGetInstanceByIdAdmin(instanceId: string): Promise<Insta
 
 // storage_quota_mb / used_storage_bytes are DB-defaulted (see migration) and
 // never set by the node at create time, so they're omitted from the payload.
+//
+// nodeToken is the user's instances:create token from the web app. rest-api
+// takes user_id from this body, and the token is what proves that user asked
+// for the instance (SW-473); our own API key can't.
 export async function apiInsertInstance(
   instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+  nodeToken: string | null,
 ): Promise<Instance> {
-  const res = await StreamwizardApi.post<Instance>("/api/nodes/instances", instance);
+  const res = await StreamwizardApi.post<Instance>("/api/nodes/instances", instance, {
+    headers: nodeToken ? { "X-Node-Token": nodeToken } : undefined,
+  });
   return res.data;
 }
 
