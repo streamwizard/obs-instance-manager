@@ -25,6 +25,7 @@ class FakeObs {
   connected = false;
   disconnected = false;
   connectUrl: string | null = null;
+  connectOptions: { eventSubscriptions?: number } | null = null;
 
   constructor() {
     FakeObs.instances.push(this);
@@ -44,8 +45,9 @@ class FakeObs {
     for (const cb of this.listeners.get(event) ?? []) cb(payload);
   }
 
-  async connect(url: string): Promise<void> {
+  async connect(url: string, _password?: string, options?: { eventSubscriptions?: number }): Promise<void> {
     this.connectUrl = url;
+    this.connectOptions = options ?? null;
     if (FakeObs.connectBehaviour === "fail") throw new Error("connection refused");
     this.connected = true;
   }
@@ -63,7 +65,14 @@ class FakeObs {
 
 mock.module("obs-websocket-js", () => ({
   default: FakeObs,
-  EventSubscription: { Scenes: 4 },
+  EventSubscription: { Scenes: 4, Vendors: 512 },
+}));
+
+// OutputStats points end up here instead of InfluxDB.
+const influxPoints: Array<{ toLineProtocol: () => string | undefined }> = [];
+mock.module("@/clients/influx", () => ({
+  pushPoint: (point: { toLineProtocol: () => string | undefined }) => influxPoints.push(point),
+  closeInflux: async () => {},
 }));
 
 // --- other collaborators ----------------------------------------------------
@@ -134,6 +143,7 @@ beforeEach(() => {
   FakeObs.connectBehaviour = "ok";
   FakeObs.currentScene = { sceneName: "Live", sceneUuid: "uuid-live" };
   broadcasts.length = 0;
+  influxPoints.length = 0;
   nodeInstances = [];
 });
 
@@ -265,4 +275,43 @@ test("sync ignores instances that are not running or have no container", async (
   await settle();
 
   expect(attachedInstanceIds()).toEqual([]);
+});
+
+test("subscribes to scene and vendor events", async () => {
+  attachInstance(makeInstance());
+  await settle();
+
+  expect(FakeObs.instances[0]!.connectOptions?.eventSubscriptions).toBe(4 | 512);
+});
+
+test("persists the stats plugin's OutputStats events as obs_output", async () => {
+  attachInstance(makeInstance());
+  await settle();
+  const obs = FakeObs.instances[0]!;
+
+  obs.emit("VendorEvent", {
+    vendorName: "streamwizard-stats",
+    eventType: "OutputStats",
+    eventData: { streaming: { active: true, kbps: 6000, droppedFrames: 2, congestion: 0.1 } },
+  });
+  // The first event opens a 10s window; detaching flushes it.
+  detachInstance("inst-1");
+
+  expect(influxPoints).toHaveLength(1);
+  const line = influxPoints[0]!.toLineProtocol()!;
+  expect(line.startsWith("obs_output,instance_id=inst-1,node_id=test-node,user_id=user-1 ")).toBe(true);
+  expect(line).toContain("dropped_frames=2i");
+  expect(line).toContain("kbps=6000");
+});
+
+test("ignores other vendors and the plugin's SourceStats event", async () => {
+  attachInstance(makeInstance());
+  await settle();
+  const obs = FakeObs.instances[0]!;
+
+  obs.emit("VendorEvent", { vendorName: "some-other-plugin", eventType: "OutputStats", eventData: { render: { activeFps: 60 } } });
+  obs.emit("VendorEvent", { vendorName: "streamwizard-stats", eventType: "SourceStats", eventData: { frameTime: 16.67, sources: [] } });
+  detachInstance("inst-1");
+
+  expect(influxPoints).toHaveLength(0);
 });
