@@ -56,3 +56,23 @@ export async function nullOn404<T>(request: () => Promise<{ data: T }>): Promise
     throw err;
   }
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True for a canonical UUID: the shape of every instance, user and subscription id. */
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
+/**
+ * One URL path segment for a rest-api call. Ids reach this client from route
+ * params, which Hono percent-decodes, so a raw "/" or ".." would otherwise
+ * change which rest-api route is called (with this node's API key). Encodes
+ * the value and refuses the segments that encoding leaves meaningful.
+ */
+export function pathSegment(value: string): string {
+  if (!value || value === "." || value === "..") {
+    throw new Error("invalid rest-api path segment");
+  }
+  return encodeURIComponent(value);
+}

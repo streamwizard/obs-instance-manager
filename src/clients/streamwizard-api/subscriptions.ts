@@ -1,7 +1,7 @@
 import type { CloudObsPlanLimits } from "@/types";
-import { StreamwizardApi } from "./client";
+import { StreamwizardApi, pathSegment } from "./client";
 
 export async function getSubscriptionLimits(subscriptionId: string): Promise<CloudObsPlanLimits> {
-  const res = await StreamwizardApi.get<CloudObsPlanLimits>(`/api/obs-nodes/subscriptions/${subscriptionId}/limits`);
+  const res = await StreamwizardApi.get<CloudObsPlanLimits>(`/api/obs-nodes/subscriptions/${pathSegment(subscriptionId)}/limits`);
   return res.data;
 }

@@ -5,7 +5,7 @@ import type { Instance } from "@/types";
 // runtime, never during module evaluation.
 import { invalidateNodeInstances } from "@/services/cache/instance-cache";
 import { forgetInstanceSecrets } from "@/services/cache/instance-secrets-cache";
-import { StreamwizardApi, nullOn404 } from "./client";
+import { StreamwizardApi, isUuid, nullOn404, pathSegment } from "./client";
 
 /** Every instance hosted on this node. */
 export async function listNodeInstances(): Promise<Instance[]> {
@@ -25,20 +25,23 @@ export async function listUnentitledInstanceIds(): Promise<string[]> {
 }
 
 export async function listUserInstances(userId: string): Promise<Instance[]> {
-  const res = await StreamwizardApi.get<Instance[]>(`/api/obs-nodes/users/${userId}/instances`);
+  const res = await StreamwizardApi.get<Instance[]>(`/api/obs-nodes/users/${pathSegment(userId)}/instances`);
   return res.data;
 }
 
 /** The instance, only if `userId` owns it. */
 export async function getInstanceById(instanceId: string, userId: string): Promise<Instance | null> {
+  // Ids come from route params; anything but a UUID can't be an instance.
+  if (!isUuid(instanceId)) return null;
   return nullOn404(() =>
-    StreamwizardApi.get<Instance>(`/api/obs-nodes/instances/${instanceId}`, { params: { user_id: userId } }),
+    StreamwizardApi.get<Instance>(`/api/obs-nodes/instances/${pathSegment(instanceId)}`, { params: { user_id: userId } }),
   );
 }
 
 /** The instance, whoever owns it. */
 export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance | null> {
-  return nullOn404(() => StreamwizardApi.get<Instance>(`/api/obs-nodes/instances/${instanceId}`));
+  if (!isUuid(instanceId)) return null;
+  return nullOn404(() => StreamwizardApi.get<Instance>(`/api/obs-nodes/instances/${pathSegment(instanceId)}`));
 }
 
 // The four mutations below are the single choke point through which every
@@ -69,7 +72,7 @@ export async function insertInstance(
 }
 
 export async function updateInstance(instanceId: string, fields: Partial<Instance>): Promise<Instance> {
-  const res = await StreamwizardApi.patch<Instance>(`/api/obs-nodes/instances/${instanceId}`, fields);
+  const res = await StreamwizardApi.patch<Instance>(`/api/obs-nodes/instances/${pathSegment(instanceId)}`, fields);
   invalidateNodeInstances();
   return res.data;
 }
@@ -79,14 +82,14 @@ export async function updateInstanceByContainerId(
   fields: Partial<Instance>,
 ): Promise<Instance | null> {
   const updated = await nullOn404(() =>
-    StreamwizardApi.patch<Instance>(`/api/obs-nodes/instances/by-container/${containerId}`, fields),
+    StreamwizardApi.patch<Instance>(`/api/obs-nodes/instances/by-container/${pathSegment(containerId)}`, fields),
   );
   if (updated) invalidateNodeInstances();
   return updated;
 }
 
 export async function deleteInstance(instanceId: string): Promise<void> {
-  await StreamwizardApi.delete(`/api/obs-nodes/instances/${instanceId}`);
+  await StreamwizardApi.delete(`/api/obs-nodes/instances/${pathSegment(instanceId)}`);
   invalidateNodeInstances();
   forgetInstanceSecrets(instanceId);
 }
