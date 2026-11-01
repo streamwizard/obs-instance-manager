@@ -4,7 +4,7 @@
 //
 // Callers go through services/cache/instance-secrets-cache, not this module.
 // Never log the result.
-import { StreamwizardApi } from "./client";
+import { StreamwizardApi, pathSegment } from "./client";
 
 export interface InstanceSecrets {
   /** null on a row that has no OBS WebSocket password. */
@@ -14,6 +14,6 @@ export interface InstanceSecrets {
 }
 
 export async function apiGetInstanceSecrets(instanceId: string): Promise<InstanceSecrets> {
-  const res = await StreamwizardApi.get<InstanceSecrets>(`/api/obs-nodes/instances/${instanceId}/secrets`);
+  const res = await StreamwizardApi.get<InstanceSecrets>(`/api/obs-nodes/instances/${pathSegment(instanceId)}/secrets`);
   return res.data;
 }

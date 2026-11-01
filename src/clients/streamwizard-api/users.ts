@@ -1,14 +1,14 @@
 // Per-user lookups: admin flag, Cloud OBS plan access and the Twitch stream key.
-import { StreamwizardApi } from "./client";
+import { StreamwizardApi, pathSegment } from "./client";
 
 export async function isAdmin(userId: string): Promise<boolean> {
-  const res = await StreamwizardApi.get<{ is_admin: boolean }>(`/api/obs-nodes/users/${userId}/is-admin`);
+  const res = await StreamwizardApi.get<{ is_admin: boolean }>(`/api/obs-nodes/users/${pathSegment(userId)}/is-admin`);
   return res.data.is_admin;
 }
 
 /** Whether the user's Cloud OBS plan may start an instance right now. */
 export async function canInteractCloudObs(userId: string): Promise<boolean> {
-  const res = await StreamwizardApi.get<{ can_interact: boolean }>(`/api/obs-nodes/users/${userId}/cloud-obs-access`);
+  const res = await StreamwizardApi.get<{ can_interact: boolean }>(`/api/obs-nodes/users/${pathSegment(userId)}/cloud-obs-access`);
   return res.data.can_interact;
 }
 
@@ -27,7 +27,7 @@ export interface StreamKeyLookup {
 
 export async function getStreamKey(userId: string): Promise<StreamKeyLookup> {
   const res = await StreamwizardApi.get<{ key: string | null; reason?: StreamKeyReason }>(
-    `/api/obs-nodes/users/${userId}/stream-key`,
+    `/api/obs-nodes/users/${pathSegment(userId)}/stream-key`,
   );
   const { key, reason } = res.data;
   return { key, reason: reason ?? (key ? "granted" : "error") };
