@@ -4,7 +4,6 @@ import type { Instance } from "@/types";
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";

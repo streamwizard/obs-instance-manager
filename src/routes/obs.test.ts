@@ -2,11 +2,10 @@ import { test, expect, mock, beforeEach } from "bun:test";
 import { Hono } from "hono";
 
 // Import-time env requirements of the transitive module graph
-// (s3/crypto/node clients validate on import).
+// (s3/node clients validate on import).
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";

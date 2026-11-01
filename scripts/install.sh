@@ -829,7 +829,6 @@ with open(env_path, "w") as f:
     f.write(f"S3_SECRET_KEY={data['S3_SECRET_KEY']}\n")
     f.write(f"S3_BUCKET={data['S3_BUCKET']}\n")
     f.write(f"S3_REGION={data['S3_REGION']}\n")
-    f.write(f"TOKEN_ENCRYPTION_KEY={data['TOKEN_ENCRYPTION_KEY']}\n")
     f.write("PORT=3000\n")
     # docker-compose.yml binds the API to loopback and to this address.
     # Blank means "not joined yet" and compose refuses to start (see the
@@ -921,7 +920,7 @@ step "Start"
 # host would stop the traffic. Refusing to start is the only safe answer
 # until the node has actually joined Tailscale.
 MISSING_KEYS=""
-for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TOKEN_ENCRYPTION_KEY TAILSCALE_IP; do
+for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TAILSCALE_IP; do
   grep -q "^${key}=.\+" "$ENV_FILE" || MISSING_KEYS="$MISSING_KEYS $key"
 done
 

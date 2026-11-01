@@ -98,8 +98,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "rest_api_url": "https://api.example.com",
      "supabase_url": "https://xxxx.supabase.co",
      "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
-     "S3_BUCKET": "...", "S3_REGION": "...",
-     "TOKEN_ENCRYPTION_KEY": "..."
+     "S3_BUCKET": "...", "S3_REGION": "..."
    }
    ```
 
@@ -272,10 +271,14 @@ alter table obs_instances
 — the concurrent-NVENC-session cap the driver enforces regardless of VRAM
 headroom — and left `null` (unlimited) for Quadro/RTX-A nodes, which have no
 such cap. `vnc_password_*` mirrors the existing `obs_ws_password_*` columns'
-shape but is generated and encrypted server-side by obs-instance-manager
-itself rather than by the panel, since the VNC password is purely an
-obs-net isolation measure (see entrypoint.sh's `x11vnc -rfbauth`) that the
-end user never needs to see.
+shape. rest-api generates and encrypts it when the node creates the row; the
+VNC password is purely an obs-net isolation measure (see entrypoint.sh's
+`x11vnc -rfbauth`) that the end user never needs to see.
+
+The node never holds `TOKEN_ENCRYPTION_KEY` and never sees these encrypted
+columns. It sends the plaintext OBS WebSocket password on create and reads
+both passwords back, in plaintext and only for its own instances, from
+`GET /api/obs-nodes/instances/:id/secrets`.
 
 Note: an earlier version of this doc also had this migration add an
 `admin_token` column, used to authenticate a panel-side relay for
