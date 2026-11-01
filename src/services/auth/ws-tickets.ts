@@ -11,13 +11,15 @@ import { randomBytes } from "node:crypto";
 // Single-use + a 30s TTL means a ticket leaked into a log is inert: it's
 // already consumed, or expired, before anyone could replay it.
 
-export type TicketScope = "metrics" | "novnc" | "obsws";
+// "selkies" is spent once on the viewer's entry URL and swapped for a session
+// cookie (services/proxy/selkies-proxy.ts), since an iframe app makes many requests.
+export type TicketScope = "metrics" | "novnc" | "obsws" | "selkies";
 
 export interface Ticket {
   userId: string;
   scope: TicketScope;
   // null for node-wide scopes like "metrics"; the instance id for the
-  // per-instance novnc/obsws proxies.
+  // per-instance novnc/obsws/selkies proxies.
   instanceId: string | null;
   expiresAt: number;
 }

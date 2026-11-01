@@ -36,5 +36,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # python
 __pycache__
 
-# local dev data
-.local-data
+# local dev data (scripts/local)
+.local-data/
+.env.local

@@ -8,7 +8,8 @@ import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { createInstanceSchema } from "@/schemas/instance";
 import { instanceWsTicketSchema } from "@/schemas/ws-ticket";
 import { proxyRoute } from "@/services/proxy/ws-proxy";
-import { mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { isServedTicketScope, mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { selkiesProxy } from "@/services/proxy/selkies-proxy";
 import { createInstance, CreateInstanceError, InstanceProvisionError } from "@/services/instances/create-instance";
 import { stopInstance } from "@/services/instances/stop-instance";
 import { destroyInstance } from "@/services/instances/destroy-instance";
@@ -38,6 +39,10 @@ const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
 // JWT check is skipped for them while every REST route still goes through it.
 instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 2000, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
 instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id, ticket) => getInstanceById(id, ticket.userId)));
+// Selkies viewer (HTTP + WS), gated by its own ticket-then-cookie session.
+const userSelkies = selkiesProxy((id, ticket) => getInstanceById(id, ticket.userId));
+instances.all("/:id/selkies", userSelkies);
+instances.all("/:id/selkies/*", userSelkies);
 
 instances.use("*", authMiddleware);
 
@@ -54,7 +59,7 @@ instances.post(
     const id = c.req.param("id");
 
     const parsed = instanceWsTicketSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
+    if (!parsed.success || !isServedTicketScope(parsed.data.scope)) {
       return c.json({ error: "Invalid scope" }, 400);
     }
 
