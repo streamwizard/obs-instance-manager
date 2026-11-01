@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { authMiddleware } from "@/middleware/auth";
 import { requireScope } from "@/middleware/scope";
-import { listUserInstances } from "@/clients/supabase";
+import { listUserInstances } from "@/clients/streamwizard-api/instances";
 import { getAllMetrics } from "@/services/metrics/metrics";
 import { STREAM_INTERVAL_MS } from "@/utils/constants";
 import { debug } from "@/utils/logger";

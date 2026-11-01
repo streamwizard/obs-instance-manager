@@ -47,7 +47,7 @@ mock.module("@/clients/docker", () => ({
   markApiStopping: () => {},
   clearApiStopping: () => {},
 }));
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => {
     calls.updates.push(patch);
     return { ...instance, ...patch };

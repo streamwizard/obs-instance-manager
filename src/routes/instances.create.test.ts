@@ -33,16 +33,8 @@ mock.module("@/middleware/auth", () => ({
     await next();
   },
 }));
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   countActiveInstances: async () => 0,
-  getSubscriptionLimits: async () => ({
-    resolution: "1920x1080",
-    vram_mb: 4096,
-    memory_mb: 4096,
-    cpu_quota: 2,
-    shm_size: "2g",
-    config_template: "1080p30",
-  }),
   insertInstance: async (row: Record<string, unknown>, nodeToken: string | null) => {
     calls.insert.push(row);
     calls.insertToken.push(nodeToken);
@@ -54,7 +46,19 @@ mock.module("@/clients/supabase", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => ({ ...calls.insert[0], ...patch }),
   getInstanceById: async () => null,
   listUserInstances: async () => [],
+}));
+mock.module("@/clients/streamwizard-api/users", () => ({
   canInteractCloudObs: async () => true,
+}));
+mock.module("@/clients/streamwizard-api/subscriptions", () => ({
+  getSubscriptionLimits: async () => ({
+    resolution: "1920x1080",
+    vram_mb: 4096,
+    memory_mb: 4096,
+    cpu_quota: 2,
+    shm_size: "2g",
+    config_template: "1080p30",
+  }),
 }));
 mock.module("@/services/cache/node-cache", () => ({
   refreshNode: async () => ({ id: "node-1", max_instances: 10, max_encoder_sessions: null }),

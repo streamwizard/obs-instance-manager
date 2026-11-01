@@ -1,4 +1,4 @@
-import { apiGetStreamKey, type StreamKeyLookup } from "@/clients/streamwizard-api";
+import { getStreamKey } from "@/clients/streamwizard-api/users";
 import { log } from "@/utils/logger";
 
 /** The user has not granted StreamWizard their stream key on Twitch. */
@@ -7,10 +7,6 @@ export class StreamKeyNotGrantedError extends Error {
   constructor() {
     super("Connect Twitch on the cloud OBS page first so this instance can stream with your key.");
   }
-}
-
-export async function getStreamKey(userId: string): Promise<StreamKeyLookup> {
-  return apiGetStreamKey(userId);
 }
 
 /**

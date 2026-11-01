@@ -1,5 +1,5 @@
 import { clearApiStopping, markApiStopping, removeContainer, stopContainer } from "@/clients/docker";
-import { updateInstance } from "@/clients/supabase";
+import { updateInstance } from "@/clients/streamwizard-api/instances";
 import { broadcastLifecycle } from "@/clients/ws-server";
 import { clearStreamKey, persistAndRemoveLocalConfig } from "@/services/storage/obs-config";
 import { withInstanceLock } from "@/utils/instance-lock";

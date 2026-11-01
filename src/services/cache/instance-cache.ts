@@ -1,5 +1,4 @@
-import { listNodeInstances } from "@/clients/supabase";
-import { NODE_ID } from "@/utils/node";
+import { listNodeInstances } from "@/clients/streamwizard-api/instances";
 import { log } from "@/utils/logger";
 import type { Instance } from "@/types";
 
@@ -11,7 +10,7 @@ import type { Instance } from "@/types";
 // process itself mutates a handful of times a day.
 //
 // The cache is correct, not approximate, because every mutation of this
-// node's instances funnels through the wrappers in clients/supabase.ts
+// node's instances funnels through the mutations in clients/streamwizard-api/instances.ts
 // (provision, start/stop, crash watchdog, delete), and each one calls
 // invalidateInstanceCache() on success — the next reader refetches. The one
 // thing this process CANNOT see is an out-of-band change (an external DB
@@ -21,9 +20,8 @@ import type { Instance } from "@/types";
 // had when every reader polled. That sync doubles as this cache's refresh,
 // so the TTL below is a failsafe for a dead sync loop, not the design.
 //
-// A single value, not a Map: listNodeInstances ignores its nodeId argument
-// because the rest-api route is identity-scoped by NODE_API_KEY, so one
-// process only ever sees one list.
+// A single value, not a Map: the rest-api route behind listNodeInstances is
+// identity-scoped by NODE_API_KEY, so one process only ever sees one list.
 
 /** Failsafe bound only — the 60s syncInstances live read is what actually
  *  keeps this fresh. Anything comfortably above that interval works. */
@@ -48,7 +46,7 @@ function fetchInstances(): Promise<Instance[]> {
   // all observe the empty cache in the same instant.
   if (inFlight) return inFlight;
 
-  inFlight = listNodeInstances(NODE_ID)
+  inFlight = listNodeInstances()
     .then((instances) => {
       cached = instances;
       cachedAt = Date.now();
@@ -110,7 +108,7 @@ export async function refreshNodeInstances(): Promise<Instance[]> {
 
 /**
  * Drops the cached list so the next reader refetches. Called by every
- * instance mutation wrapper in clients/supabase.ts — lazy on purpose: the
+ * instance mutation in clients/streamwizard-api/instances.ts — lazy on purpose: the
  * mutation path shouldn't pay for (or fail on) the refetch, and with no
  * dashboard attached the next natural reader is at most 10s away.
  */

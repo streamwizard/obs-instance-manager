@@ -5,7 +5,7 @@
 // instances.ts and admin.ts, which had already drifted (admin.ts's copy was
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
 import { createContainer, findContainerByName, removeContainer, startContainer } from "@/clients/docker";
-import { updateInstance } from "@/clients/supabase";
+import { updateInstance } from "@/clients/streamwizard-api/instances";
 import { broadcastLifecycle } from "@/clients/ws-server";
 import { decryptPassword, encryptPassword, generateVncPassword } from "@/utils/crypto";
 import { debug, log } from "@/utils/logger";

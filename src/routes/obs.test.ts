@@ -11,17 +11,15 @@ process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
 
-// The route pulls in clients/supabase -> streamwizard-api, which needs
-// REST_API_URL/NODE_API_KEY at import time; stub the client module so the
+// The route pulls in the streamwizard-api client, which needs
+// REST_API_URL/NODE_API_KEY at import time; stub the client modules so the
 // tests exercise auth + validation + lookup wiring without a panel.
 let mockInstance: Record<string, unknown> | null = null;
 const unused = () => {
   throw new Error("not stubbed");
 };
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   getInstanceByIdAdmin: async () => mockInstance,
-  isAdmin: unused,
-  getNode: unused,
   listUserInstances: unused,
   listNodeInstances: unused,
   getInstanceById: unused,
@@ -29,8 +27,19 @@ mock.module("@/clients/supabase", () => ({
   updateInstance: unused,
   updateInstanceByContainerId: unused,
   deleteInstance: unused,
-  sumAllocatedVram: unused,
   countActiveInstances: unused,
+  listUnentitledInstanceIds: unused,
+}));
+mock.module("@/clients/streamwizard-api/users", () => ({
+  isAdmin: unused,
+  canInteractCloudObs: unused,
+  getStreamKey: unused,
+}));
+mock.module("@/clients/streamwizard-api/nodes", () => ({
+  getNode: unused,
+  postReconcileReport: unused,
+}));
+mock.module("@/clients/streamwizard-api/subscriptions", () => ({
   getSubscriptionLimits: unused,
 }));
 

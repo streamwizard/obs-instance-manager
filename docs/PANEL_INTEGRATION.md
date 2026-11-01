@@ -217,9 +217,10 @@ and expose a way to force-close them.
 
 An earlier version of this doc flagged that every node received the global
 Supabase service-role key and called Supabase directly, bypassing RLS. That's
-no longer the case: `src/clients/supabase.ts` is now a thin wrapper around
-`src/clients/streamwizard-api.ts`, which calls the panel's `/api/nodes/*`
-endpoints using the node's own `NODE_API_KEY` instead. Each node's blast
+no longer the case: all database access goes through
+`src/clients/streamwizard-api/` (one module per domain: `nodes`, `instances`,
+`users`, `subscriptions`), which calls the panel's `/api/nodes/*` endpoints
+using the node's own `NODE_API_KEY` instead. Each node's blast
 radius is now whatever those node-scoped endpoints expose, not the whole
 database.
 

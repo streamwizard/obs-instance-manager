@@ -1,5 +1,5 @@
 import type { Context, Next } from "hono";
-import { isAdmin } from "@/clients/supabase";
+import { isAdmin } from "@/clients/streamwizard-api/users";
 import { debug } from "@/utils/logger";
 import type { AppVariables } from "@/types";
 

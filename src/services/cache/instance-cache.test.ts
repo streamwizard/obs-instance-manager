@@ -32,7 +32,7 @@ let listCalls = 0;
 let nextList: Instance[] = [makeInstance("a")];
 let failWith: Error | null = null;
 
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   listNodeInstances: async () => {
     listCalls++;
     if (failWith) throw failWith;

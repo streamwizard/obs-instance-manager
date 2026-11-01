@@ -1,4 +1,4 @@
-import { getInstanceByIdAdmin } from "@/clients/supabase";
+import { getInstanceByIdAdmin } from "@/clients/streamwizard-api/instances";
 import { restartInstance } from "@/services/instances/instance-lifecycle";
 import { trackInstanceEvent } from "@/services/metrics/influx-metrics";
 import { RESTART_STAGGER_MS } from "@/utils/constants";

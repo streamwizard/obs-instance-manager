@@ -12,7 +12,7 @@
 import { chown, lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { deleteObsMediaFile, localMediaDir, moveObsMediaFile, pushObsMediaFile } from "@/services/storage/obs-config";
-import { updateInstance } from "@/clients/supabase";
+import { updateInstance } from "@/clients/streamwizard-api/instances";
 import { withInstanceLock } from "@/utils/instance-lock";
 import { OBS_MEDIA_MAX_FILE_BYTES } from "@/utils/constants";
 import {

@@ -1,12 +1,7 @@
 // Provisioning flow behind POST /instances: capacity checks, row insert,
 // stream-key lookup, config/plugin pull, then container create + start.
-import {
-  countActiveInstances,
-  deleteInstance,
-  getSubscriptionLimits,
-  insertInstance,
-  updateInstance,
-} from "@/clients/supabase";
+import { countActiveInstances, deleteInstance, insertInstance, updateInstance } from "@/clients/streamwizard-api/instances";
+import { getSubscriptionLimits } from "@/clients/streamwizard-api/subscriptions";
 import { createContainer, removeContainer, startContainer } from "@/clients/docker";
 import { broadcastLifecycle } from "@/clients/ws-server";
 import { refreshNode } from "@/services/cache/node-cache";
@@ -64,7 +59,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
     throw new CreateInstanceError("Subscription not found or inactive", 400);
   }
 
-  const activeCount = await countActiveInstances(node.id);
+  const activeCount = await countActiveInstances();
   if (activeCount >= node.max_instances) {
     throw new CreateInstanceError("Node has reached max_instances capacity", 409);
   }

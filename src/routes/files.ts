@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { authMiddleware } from "@/middleware/auth";
 import { requireScope } from "@/middleware/scope";
 import { rateLimitByUser } from "@/middleware/rate-limit";
-import { getInstanceById } from "@/clients/supabase";
+import { getInstanceById } from "@/clients/streamwizard-api/instances";
 import { deleteFile, getListing, renameFile, resolveDownload, uploadFile } from "@/services/storage/media";
 import { MediaError } from "@/services/storage/media-error";
 import { deleteFileSchema, renameFileSchema } from "@/schemas/files";

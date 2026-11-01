@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getInstanceByIdAdmin } from "@/clients/supabase";
+import { getInstanceByIdAdmin } from "@/clients/streamwizard-api/instances";
 import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { authMiddleware } from "@/middleware/auth";
 import { requireAdmin } from "@/middleware/require-admin";

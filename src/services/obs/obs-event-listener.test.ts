@@ -88,11 +88,9 @@ let nodeInstances: unknown[] = [];
 const unused = () => {
   throw new Error("not stubbed");
 };
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   listNodeInstances: async () => nodeInstances,
   getInstanceByIdAdmin: unused,
-  isAdmin: unused,
-  getNode: unused,
   listUserInstances: unused,
   getInstanceById: unused,
   insertInstance: unused,
@@ -100,6 +98,18 @@ mock.module("@/clients/supabase", () => ({
   updateInstanceByContainerId: unused,
   deleteInstance: unused,
   countActiveInstances: unused,
+  listUnentitledInstanceIds: unused,
+}));
+mock.module("@/clients/streamwizard-api/users", () => ({
+  isAdmin: unused,
+  canInteractCloudObs: unused,
+  getStreamKey: unused,
+}));
+mock.module("@/clients/streamwizard-api/nodes", () => ({
+  getNode: unused,
+  postReconcileReport: unused,
+}));
+mock.module("@/clients/streamwizard-api/subscriptions", () => ({
   getSubscriptionLimits: unused,
 }));
 

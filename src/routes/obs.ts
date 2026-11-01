@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { commandAuthMiddleware } from "@/middleware/command-auth";
-import { getInstanceByIdAdmin } from "@/clients/supabase";
+import { getInstanceByIdAdmin } from "@/clients/streamwizard-api/instances";
 import { executeObsCommands, validateObsCommands, ObsCommandError } from "@/services/obs/obs-command";
 import { log } from "@/utils/logger";
 import type { AppVariables } from "@/types";
