@@ -58,7 +58,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    `docker-compose.yml`) and then calls:
 
    ```
-   POST {rest-api-url}/api/nodes/claim
+   POST {rest-api-url}/api/obs-nodes/claim
    Content-Type: application/json
 
    {
@@ -107,7 +107,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    reports its address back on its own authenticated round trip:
 
    ```
-   PATCH {rest-api-url}/api/nodes/me
+   PATCH {rest-api-url}/api/obs-nodes/me
    Authorization: Bearer <node_api_key>
    Content-Type: application/json
 
@@ -152,7 +152,7 @@ non-fatal: if the Tailscale API is unreachable or the OAuth client isn't
 scoped for the tag, `/claim` still succeeds and returns
 `tailscale_authkey: null`; `install.sh` then warns and tells the admin to run
 `tailscale up` by hand, add the ufw rule, set `TAILSCALE_IP` in `.env`, and
-call `PATCH /api/nodes/me` themselves.
+call `PATCH /api/obs-nodes/me` themselves.
 
 Tailnet prerequisites (one-off, in the Tailscale admin console):
 
@@ -219,7 +219,7 @@ An earlier version of this doc flagged that every node received the global
 Supabase service-role key and called Supabase directly, bypassing RLS. That's
 no longer the case: all database access goes through
 `src/clients/streamwizard-api/` (one module per domain: `nodes`, `instances`,
-`users`, `subscriptions`), which calls the panel's `/api/nodes/*` endpoints
+`users`, `subscriptions`), which calls the panel's `/api/obs-nodes/*` endpoints
 using the node's own `NODE_API_KEY` instead. Each node's blast
 radius is now whatever those node-scoped endpoints expose, not the whole
 database.

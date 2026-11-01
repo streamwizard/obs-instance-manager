@@ -5,7 +5,7 @@ import { hasCommandKey, verifyCommandKey } from "@/services/auth/command-key";
 
 // Per-node command-key auth for the public /obs route (obs-auto-switcher). The
 // switcher presents this node's obs_command key as a Bearer; we compare its
-// SHA-256 against the hash fetched from GET /api/nodes/me. Unlike the old
+// SHA-256 against the hash fetched from GET /api/obs-nodes/me. Unlike the old
 // shared INTERNAL_SERVICE_KEY, this key is unique per node — a leak can only
 // drive OBS scenes on this one node, never authenticate as the node elsewhere.
 // The plaintext key never lives here; we only ever hold its hash.

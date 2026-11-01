@@ -755,7 +755,7 @@ print(json.dumps({
   claim_max_attempts=10
   claim_delay=1
   while true; do
-    CLAIM_RAW="$(curl -sS -w '\n%{http_code}' -X POST "$REST_API_URL/api/nodes/claim" \
+    CLAIM_RAW="$(curl -sS -w '\n%{http_code}' -X POST "$REST_API_URL/api/obs-nodes/claim" \
       -H "Content-Type: application/json" \
       -d "$CLAIM_BODY")"
     CLAIM_HTTP_STATUS="${CLAIM_RAW##*$'\n'}"
@@ -774,7 +774,7 @@ print(json.dumps({
     esac
 
     if [ "$claim_attempt" -ge "$claim_max_attempts" ]; then
-      die "Node claim request to $REST_API_URL failed after $claim_max_attempts attempts (last status: $CLAIM_HTTP_STATUS). Check the URL and that rest-api's /api/nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
+      die "Node claim request to $REST_API_URL failed after $claim_max_attempts attempts (last status: $CLAIM_HTTP_STATUS). Check the URL and that rest-api's /api/obs-nodes/claim endpoint exists (see docs/PANEL_INTEGRATION.md)."
     fi
     warn "Node claim request failed (HTTP $CLAIM_HTTP_STATUS, attempt $claim_attempt/$claim_max_attempts), retrying in ${claim_delay}s..."
     sleep "$claim_delay"
@@ -797,7 +797,7 @@ print(json.dumps({
         # blank -- which is what makes the node reachable from the panel.
         NODE_API_KEY="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node_api_key'])" "$CLAIM_RESPONSE")"
         REPORT_BODY="$(python3 -c "import json,sys; print(json.dumps({'tailscale_ip': sys.argv[1]}))" "$TAILSCALE_IP")"
-        REPORT_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "$REST_API_URL/api/nodes/me" \
+        REPORT_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH "$REST_API_URL/api/obs-nodes/me" \
           -H "Authorization: Bearer $NODE_API_KEY" \
           -H "Content-Type: application/json" \
           -d "$REPORT_BODY")"
@@ -807,7 +807,7 @@ print(json.dumps({
       fi
       add_tailscale_api_rule || warn "tailscale0 still not present after 'tailscale up'; add the :$API_PORT rule manually: ufw allow in on tailscale0 to any port $API_PORT proto tcp"
     else
-      warn "Claim response did not include a Tailscale auth key (Tailscale API may be unreachable or misconfigured on the panel side). Run 'tailscale up' yourself, then: ufw allow in on tailscale0 to any port $API_PORT proto tcp, set TAILSCALE_IP in $ENV_FILE, and report it with: curl -X PATCH $REST_API_URL/api/nodes/me -H 'Authorization: Bearer <NODE_API_KEY>' -H 'Content-Type: application/json' -d '{\"tailscale_ip\":\"<ip>\"}'"
+      warn "Claim response did not include a Tailscale auth key (Tailscale API may be unreachable or misconfigured on the panel side). Run 'tailscale up' yourself, then: ufw allow in on tailscale0 to any port $API_PORT proto tcp, set TAILSCALE_IP in $ENV_FILE, and report it with: curl -X PATCH $REST_API_URL/api/obs-nodes/me -H 'Authorization: Bearer <NODE_API_KEY>' -H 'Content-Type: application/json' -d '{\"tailscale_ip\":\"<ip>\"}'"
     fi
   fi
 

@@ -4,7 +4,7 @@ import { debug, log } from "@/utils/logger";
 
 // The obs-auto-switcher authenticates to the public /obs route with this node's
 // per-node command key. The rest-api hands us only its SHA-256 hash (via
-// GET /api/nodes/me); the plaintext never lives on the node. We cache the hash
+// GET /api/obs-nodes/me); the plaintext never lives on the node. We cache the hash
 // in memory and re-fetch (rate-limited) on a mismatch, so a DB rotation
 // propagates without a restart.
 //

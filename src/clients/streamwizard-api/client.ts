@@ -1,4 +1,4 @@
-// HTTP client for the panel's rest-api (`/api/nodes/*`). Every database read
+// HTTP client for the panel's rest-api (`/api/obs-nodes/*`). Every database read
 // and write this node does goes through here: the node holds no database
 // credentials of its own, only NODE_API_KEY, which rest-api uses to know
 // which node is calling. The per-domain modules next to this file are the

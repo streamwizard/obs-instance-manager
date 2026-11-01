@@ -3,7 +3,7 @@ import type { NodeTokenClaims } from "@/services/auth/node-token";
 
 export type InstanceStatus = "creating" | "running" | "stopped" | "error";
 
-// Mirrors the obs_nodes row returned verbatim by GET /api/nodes/me (plus
+// Mirrors the obs_nodes row returned verbatim by GET /api/obs-nodes/me (plus
 // command_key_hash). Keep it in sync with the table: memory_mb/cpu_quota/
 // vram_mb/shm_size were dropped from obs_nodes in migration
 // 20260704000000_obs_nodes_self_report_capacity, but stayed declared here, so

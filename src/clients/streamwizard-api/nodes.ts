@@ -4,7 +4,7 @@ import type { Node } from "@/types";
 import { StreamwizardApi } from "./client";
 
 export async function getNode(): Promise<Node> {
-  const res = await StreamwizardApi.get<Node>("/api/nodes/me");
+  const res = await StreamwizardApi.get<Node>("/api/obs-nodes/me");
   return res.data;
 }
 
@@ -20,5 +20,5 @@ export interface ReconcileReport {
 }
 
 export async function postReconcileReport(report: ReconcileReport): Promise<void> {
-  await StreamwizardApi.post("/api/nodes/reconcile", report);
+  await StreamwizardApi.post("/api/obs-nodes/reconcile", report);
 }
