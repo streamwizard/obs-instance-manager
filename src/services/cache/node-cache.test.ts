@@ -5,7 +5,6 @@ import type { Node } from "@/types";
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
@@ -40,24 +39,14 @@ let nextNode: Node = makeNode();
 let failWith: Error | null = null;
 let delayMs = 0;
 
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/nodes", () => ({
   getNode: async () => {
     calls++;
     if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
     if (failWith) throw failWith;
     return nextNode;
   },
-  isAdmin: unused,
-  listUserInstances: unused,
-  listNodeInstances: unused,
-  getInstanceById: unused,
-  getInstanceByIdAdmin: unused,
-  insertInstance: unused,
-  updateInstance: unused,
-  updateInstanceByContainerId: unused,
-  deleteInstance: unused,
-  countActiveInstances: unused,
-  getSubscriptionLimits: unused,
+  postReconcileReport: unused,
 }));
 
 const { getCachedNode, refreshNode, peekCachedNode, resetNodeCache } = await import("./node-cache");

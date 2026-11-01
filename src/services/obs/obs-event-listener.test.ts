@@ -1,8 +1,7 @@
 import { test, expect, mock, beforeEach } from "bun:test";
 
 // Import-time env requirements of the transitive module graph
-// (crypto/node/streamwizard-api clients validate on import).
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
+// (node/streamwizard-api clients validate on import).
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
@@ -45,8 +44,11 @@ class FakeObs {
     for (const cb of this.listeners.get(event) ?? []) cb(payload);
   }
 
-  async connect(url: string, _password?: string, options?: { eventSubscriptions?: number }): Promise<void> {
+  connectPassword: string | undefined;
+
+  async connect(url: string, password?: string, options?: { eventSubscriptions?: number }): Promise<void> {
     this.connectUrl = url;
+    this.connectPassword = password;
     this.connectOptions = options ?? null;
     if (FakeObs.connectBehaviour === "fail") throw new Error("connection refused");
     this.connected = true;
@@ -88,11 +90,9 @@ let nodeInstances: unknown[] = [];
 const unused = () => {
   throw new Error("not stubbed");
 };
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   listNodeInstances: async () => nodeInstances,
   getInstanceByIdAdmin: unused,
-  isAdmin: unused,
-  getNode: unused,
   listUserInstances: unused,
   getInstanceById: unused,
   insertInstance: unused,
@@ -100,6 +100,18 @@ mock.module("@/clients/supabase", () => ({
   updateInstanceByContainerId: unused,
   deleteInstance: unused,
   countActiveInstances: unused,
+  listUnentitledInstanceIds: unused,
+}));
+mock.module("@/clients/streamwizard-api/users", () => ({
+  isAdmin: unused,
+  canInteractCloudObs: unused,
+  getStreamKey: unused,
+}));
+mock.module("@/clients/streamwizard-api/nodes", () => ({
+  getNode: unused,
+  postReconcileReport: unused,
+}));
+mock.module("@/clients/streamwizard-api/subscriptions", () => ({
   getSubscriptionLimits: unused,
 }));
 
@@ -110,10 +122,14 @@ mock.module("@/clients/docker", () => ({
   OBS_WS_PORT_INTERNAL: 4455,
 }));
 
-// Encrypted-password fields are passed straight to decryptPassword; stub it so
-// the tests don't need real AES material.
-mock.module("@/utils/crypto", () => ({
-  decryptPassword: () => "secret",
+// rest-api decrypts the password; the listener reads it per connect attempt.
+let obsWsPassword: string | null = "secret";
+let secretsError: Error | null = null;
+mock.module("@/services/cache/instance-secrets-cache", () => ({
+  getInstanceSecrets: async () => {
+    if (secretsError) throw secretsError;
+    return { obs_ws_password: obsWsPassword, vnc_password: "vnc" };
+  },
 }));
 
 const { attachInstance, attachedInstanceIds, detachInstance, detachAll, syncInstances } = await import(
@@ -127,9 +143,6 @@ function makeInstance(overrides: Record<string, unknown> = {}) {
     container_name: "obs-instance-inst-1",
     container_id: "container-1",
     status: "running",
-    obs_ws_password_ciphertext: "ct",
-    obs_ws_password_iv: "iv",
-    obs_ws_password_tag: "tag",
     ...overrides,
   } as never;
 }
@@ -145,6 +158,8 @@ beforeEach(() => {
   broadcasts.length = 0;
   influxPoints.length = 0;
   nodeInstances = [];
+  obsWsPassword = "secret";
+  secretsError = null;
 });
 
 test("attach connects to the instance container and seeds the current scene", async () => {
@@ -174,12 +189,29 @@ test("attaches regardless of the DB status, since the docker start event beats t
   expect(attachedInstanceIds()).toEqual(["inst-1"]);
 });
 
+test("connects with the password from rest-api", async () => {
+  attachInstance(makeInstance());
+  await settle();
+
+  expect(FakeObs.instances[0]!.connectPassword).toBe("secret");
+});
+
 test("skips an instance with no stored websocket password", async () => {
-  attachInstance(makeInstance({ obs_ws_password_ciphertext: null }));
+  obsWsPassword = null;
+  attachInstance(makeInstance());
   await settle();
 
   expect(FakeObs.instances.length).toBe(0);
   expect(attachedInstanceIds()).toEqual([]);
+});
+
+test("a failed password lookup keeps the session and retries instead of throwing", async () => {
+  secretsError = new Error("Request failed with status code 503");
+  attachInstance(makeInstance());
+  await settle();
+
+  expect(FakeObs.instances.length).toBe(0);
+  expect(attachedInstanceIds()).toEqual(["inst-1"]);
 });
 
 test("broadcasts scene changes and dedupes a repeat of the same uuid", async () => {

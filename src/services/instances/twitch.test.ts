@@ -1,11 +1,11 @@
 import { beforeEach, expect, mock, test } from "bun:test";
-import type { StreamKeyLookup } from "@/clients/streamwizard-api";
+import type { StreamKeyLookup } from "@/clients/streamwizard-api/users";
 
 let lookup: StreamKeyLookup;
 const warnings: string[] = [];
 
-mock.module("@/clients/streamwizard-api", () => ({
-  apiGetStreamKey: async () => lookup,
+mock.module("@/clients/streamwizard-api/users", () => ({
+  getStreamKey: async () => lookup,
 }));
 mock.module("@/utils/logger", () => ({
   log: (_level: string, message: string) => {

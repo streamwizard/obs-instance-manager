@@ -1,0 +1,26 @@
+# Dev box overlay (WSL2 + Docker Desktop + an NVIDIA GPU): the manager starts
+# Selkies-based OBS containers that get the GPU directly, with no gpu-xserver,
+# no Tailscale and no Cloudflare Tunnel. Use scripts/local/up.sh rather than
+# calling compose by hand; it passes the right files and --env-file.
+services:
+  api:
+    env_file: !override
+      - .env.local
+    ports: !override
+      # localhost, not 127.0.0.1, is what obs_nodes.api_url points at: the
+      # panel runs on localhost:3000, and the Selkies session cookie is only
+      # sent inside the viewer iframe when both are the same site.
+      - "127.0.0.1:${API_HOST_PORT:-3100}:3000"
+    volumes: !override
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out: the manager hands these paths to Docker as
+      # bind sources for the instance containers.
+      - ${LOCAL_DATA_DIR:?run scripts/local/register-node.sh first}:${LOCAL_DATA_DIR}
+    extra_hosts:
+      # rest-api (:8080) and Supabase (:54321) run on the host.
+      - "host.docker.internal:host-gateway"
+
+  # Needs the NVIDIA Xorg driver, which WSL2 does not have. Instances render
+  # through Mesa's d3d12 driver instead (OBS_GL_MODE=d3d12).
+  gpu-xserver:
+    profiles: ["prod-gpu"]

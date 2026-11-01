@@ -1,5 +1,6 @@
+import { instanceRuntime } from "@/clients/docker";
 import { issueTicket } from "@/services/auth/ws-tickets";
-import { resolveVncPassword } from "@/services/instances/instance-lifecycle";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import type { InstanceWsTicketScope } from "@/schemas/ws-ticket";
 import type { Instance } from "@/types";
 
@@ -9,6 +10,15 @@ export interface InstanceTicketResponse {
   ticket: string;
   expires_in: number;
   vnc_password?: string;
+  /** Which viewer this node's instances run, so the panel picks the client. */
+  viewer: "novnc" | "selkies";
+}
+
+// Which viewer tickets this node hands out: "selkies" only where instances
+// actually run Selkies, so a panel asking for it on a noVNC node gets a 400
+// and falls back. obsws works with either.
+export function isServedTicketScope(scope: InstanceWsTicketScope): boolean {
+  return scope === "obsws" || scope === instanceRuntime.viewer;
 }
 
 // Mints the single-use ticket the browser puts on a per-instance WS proxy URL.
@@ -28,9 +38,10 @@ export async function mintInstanceTicket(
   const ticket = issueTicket({ userId, scope, instanceId: instance.id });
 
   if (scope === "novnc") {
-    const vncPassword = await resolveVncPassword(instance);
-    return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS, vnc_password: vncPassword };
+    // rest-api decrypts it (and creates one for old rows that have none).
+    const { vnc_password } = await getInstanceSecrets(instance.id);
+    return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS, vnc_password, viewer: instanceRuntime.viewer };
   }
 
-  return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS };
+  return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS, viewer: instanceRuntime.viewer };
 }

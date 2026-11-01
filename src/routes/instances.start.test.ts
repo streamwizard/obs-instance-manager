@@ -5,7 +5,6 @@ import { Hono } from "hono";
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
@@ -35,16 +34,8 @@ mock.module("@/middleware/auth", () => ({
     await next();
   },
 }));
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   countActiveInstances: async () => 0,
-  getSubscriptionLimits: async () => ({
-    resolution: "1920x1080",
-    vram_mb: 4096,
-    memory_mb: 4096,
-    cpu_quota: 2,
-    shm_size: "2g",
-    config_template: "1080p30",
-  }),
   insertInstance: async (row: Record<string, unknown>) => {
     calls.insert.push(row);
     return row;
@@ -55,10 +46,22 @@ mock.module("@/clients/supabase", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => ({ ...calls.insert[0], ...patch }),
   getInstanceById: async (id: string) => (id === "i-1" ? { ...stoppedInstance } : null),
   listUserInstances: async () => [],
+}));
+mock.module("@/clients/streamwizard-api/users", () => ({
   canInteractCloudObs: async () => {
     if (planLookupFails) throw new Error("rest-api down");
     return planActive;
   },
+}));
+mock.module("@/clients/streamwizard-api/subscriptions", () => ({
+  getSubscriptionLimits: async () => ({
+    resolution: "1920x1080",
+    vram_mb: 4096,
+    memory_mb: 4096,
+    cpu_quota: 2,
+    shm_size: "2g",
+    config_template: "1080p30",
+  }),
 }));
 mock.module("@/services/cache/node-cache", () => ({
   refreshNode: async () => ({ id: "node-1", max_instances: 10, max_encoder_sessions: null }),
@@ -85,6 +88,8 @@ mock.module("@/clients/docker", () => ({
   stopContainer: async () => {},
   NOVNC_PORT_INTERNAL: 6080,
   OBS_WS_PORT_INTERNAL: 4455,
+  SELKIES_PORT_INTERNAL: 8080,
+  instanceRuntime: { viewer: "novnc" },
 }));
 mock.module("@/clients/ws-server", () => ({
   broadcastLifecycle: (_u: string, _i: string, action: string) => {
@@ -107,7 +112,6 @@ mock.module("@/services/instances/instance-lifecycle", () => ({
     restarted.push(instance.id as string);
     return { ...instance, status: "running" };
   },
-  resolveVncPassword: async () => "vnc",
 }));
 
 const { default: instances } = await import("./instances");

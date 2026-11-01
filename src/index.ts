@@ -32,7 +32,7 @@ await loadCommandKeyHash();
 startCommandKeyRefresh();
 
 startConfigAutosave();
-startPlanSweep(NODE_ID);
+startPlanSweep();
 
 const server = Bun.serve({
   port,

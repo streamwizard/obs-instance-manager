@@ -8,7 +8,7 @@ import type { Node } from "@/types";
 // token names one node (aud = this node's id), one action (scope) and, for
 // per-instance routes, one instance (iid), and lives 60 seconds. It is signed
 // with an Ed25519 key only the web apps hold; this node gets the public keys
-// from GET /api/nodes/me, so it can check a token but never mint or alter one,
+// from GET /api/obs-nodes/me, so it can check a token but never mint or alter one,
 // and a token captured here is useless on any other node.
 
 export const NODE_TOKEN_ISSUER = "streamwizard-node-token";

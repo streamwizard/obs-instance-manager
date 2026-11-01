@@ -4,7 +4,6 @@ import { test, expect, mock, beforeEach } from "bun:test";
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
@@ -32,8 +31,9 @@ const calls = {
 
 mock.module("@/clients/docker", () => ({
   findContainerByName: async () => (probeQueue.length ? probeQueue.shift()! : existing),
-  createContainer: async () => {
+  createContainer: async (opts: { obsWsPassword?: string; vncPassword?: string }) => {
     calls.createContainer++;
+    containerPasswords.push({ obsWsPassword: opts.obsWsPassword, vncPassword: opts.vncPassword });
     if (createError) throw createError;
     return "new-container";
   },
@@ -47,7 +47,7 @@ mock.module("@/clients/docker", () => ({
   markApiStopping: () => {},
   clearApiStopping: () => {},
 }));
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   updateInstance: async (_id: string, patch: Record<string, unknown>) => {
     calls.updates.push(patch);
     return { ...instance, ...patch };
@@ -58,10 +58,15 @@ mock.module("@/clients/ws-server", () => ({
     calls.lifecycle.push(action);
   },
 }));
-mock.module("@/utils/crypto", () => ({
-  decryptPassword: () => "obs-pw",
-  encryptPassword: () => ({ ciphertext: "c", iv: "i", tag: "t" }),
-  generateVncPassword: () => "vnc-pw",
+// rest-api decrypts the passwords; the node only reads them back.
+let secrets: { obs_ws_password: string | null; vnc_password: string } = { obs_ws_password: "obs-pw", vnc_password: "vnc-pw" };
+let secretsError: Error | null = null;
+const containerPasswords: { obsWsPassword?: string; vncPassword?: string }[] = [];
+mock.module("@/services/cache/instance-secrets-cache", () => ({
+  getInstanceSecrets: async () => {
+    if (secretsError) throw secretsError;
+    return secrets;
+  },
 }));
 mock.module("@/services/storage/obs-config", () => ({
   pullObsConfig: async () => {
@@ -104,12 +109,6 @@ const instance = {
   shm_size: "2g",
   config_template: null,
   subscription_id: "sub-1",
-  obs_ws_password_ciphertext: "c",
-  obs_ws_password_iv: "i",
-  obs_ws_password_tag: "t",
-  vnc_password_ciphertext: "c",
-  vnc_password_iv: "i",
-  vnc_password_tag: "t",
 } as any;
 
 beforeEach(() => {
@@ -117,6 +116,9 @@ beforeEach(() => {
   probeQueue = [];
   createError = null;
   streamKeyError = null;
+  secrets = { obs_ws_password: "obs-pw", vnc_password: "vnc-pw" };
+  secretsError = null;
+  containerPasswords.length = 0;
   calls.createContainer = 0;
   calls.startContainer = 0;
   calls.removeContainer = [];
@@ -196,8 +198,23 @@ test("stream key refused: rethrows before any broadcast, config write or status 
   expect(calls.updates).toEqual([]);
 });
 
+test("passes the passwords from rest-api into the container", async () => {
+  await restartInstance(instance);
+  expect(containerPasswords).toEqual([{ obsWsPassword: "obs-pw", vncPassword: "vnc-pw" }]);
+});
+
+test("secrets call fails: refuses the start before any broadcast or side effect", async () => {
+  secretsError = new Error("Request failed with status code 503");
+  await expect(restartInstance(instance)).rejects.toThrow("Could not load the instance's passwords from rest-api");
+  expect(calls.lifecycle).toEqual([]);
+  expect(calls.pullObsConfig).toBe(0);
+  expect(calls.createContainer).toBe(0);
+  expect(calls.updates).toEqual([]);
+});
+
 test("missing websocket password: rethrows before any broadcast or side effect", async () => {
-  await expect(restartInstance({ ...instance, obs_ws_password_ciphertext: null })).rejects.toThrow(
+  secrets = { obs_ws_password: null, vnc_password: "vnc-pw" };
+  await expect(restartInstance(instance)).rejects.toThrow(
     "missing OBS WebSocket password"
   );
   expect(calls.lifecycle).toEqual([]);

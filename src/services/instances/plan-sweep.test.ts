@@ -8,7 +8,7 @@ const rows: Record<string, { id: string; user_id: string; status: string; contai
 const stopped: string[] = [];
 const locked = new Set<string>();
 
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   listUnentitledInstanceIds: async () => {
     if (listFails) throw new Error("rest-api down");
     return unentitled;
@@ -44,7 +44,7 @@ test("stops every listed running instance", async () => {
   running("i-1");
   running("i-2");
   unentitled = ["i-1", "i-2"];
-  expect(await sweepUnentitledInstances("node-1")).toEqual(["i-1", "i-2"]);
+  expect(await sweepUnentitledInstances()).toEqual(["i-1", "i-2"]);
   expect(stopped).toEqual(["i-1", "i-2"]);
 });
 
@@ -54,19 +54,19 @@ test("skips locked instances and rows that are no longer running", async () => {
   rows["i-3"] = { id: "i-3", user_id: "u", status: "stopped", container_id: null };
   locked.add("i-1");
   unentitled = ["i-1", "i-2", "i-3", "i-gone"];
-  expect(await sweepUnentitledInstances("node-1")).toEqual(["i-2"]);
+  expect(await sweepUnentitledInstances()).toEqual(["i-2"]);
 });
 
 test("one failed stop doesn't skip the rest", async () => {
   running("i-boom");
   running("i-2");
   unentitled = ["i-boom", "i-2"];
-  expect(await sweepUnentitledInstances("node-1")).toEqual(["i-2"]);
+  expect(await sweepUnentitledInstances()).toEqual(["i-2"]);
 });
 
 test("stops nothing when rest-api can't answer", async () => {
   running("i-1");
   listFails = true;
-  await expect(sweepUnentitledInstances("node-1")).rejects.toThrow("rest-api down");
+  await expect(sweepUnentitledInstances()).rejects.toThrow("rest-api down");
   expect(stopped).toEqual([]);
 });

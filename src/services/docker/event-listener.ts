@@ -1,5 +1,5 @@
 import { docker, isApiStopping } from "@/clients/docker";
-import { getInstanceByIdAdmin, updateInstanceByContainerId } from "@/clients/supabase";
+import { getInstanceByIdAdmin, updateInstanceByContainerId } from "@/clients/streamwizard-api/instances";
 import { broadcastLifecycle } from "@/clients/ws-server";
 import { trackInstanceEvent } from "@/services/metrics/influx-metrics";
 import { attachInstance, detachInstance } from "@/services/obs/obs-event-listener";

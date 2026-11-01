@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getInstanceByIdAdmin } from "@/clients/supabase";
+import { getInstanceByIdAdmin } from "@/clients/streamwizard-api/instances";
 import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { authMiddleware } from "@/middleware/auth";
 import { requireAdmin } from "@/middleware/require-admin";
@@ -7,7 +7,8 @@ import { requireScope } from "@/middleware/scope";
 import { rateLimitByUser } from "@/middleware/rate-limit";
 import { instanceWsTicketSchema, metricsWsTicketSchema } from "@/schemas/ws-ticket";
 import { issueTicket } from "@/services/auth/ws-tickets";
-import { mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { isServedTicketScope, mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { selkiesProxy } from "@/services/proxy/selkies-proxy";
 import { metricsStreamHandler } from "@/services/metrics/metrics-stream";
 import { proxyRoute } from "@/services/proxy/ws-proxy";
 import { restartInstance } from "@/services/instances/instance-lifecycle";
@@ -33,6 +34,9 @@ const wsTicketRateLimit = rateLimitByUser(wsTicketLimiter, "Too many ticket requ
 admin.get("/metrics/stream", metricsStreamHandler);
 admin.get("/instances/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, "novnc", (id) => getInstanceByIdAdmin(id)));
 admin.get("/instances/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id) => getInstanceByIdAdmin(id)));
+const adminSelkies = selkiesProxy((id) => getInstanceByIdAdmin(id));
+admin.all("/instances/:id/selkies", adminSelkies);
+admin.all("/instances/:id/selkies/*", adminSelkies);
 
 admin.use("*", authMiddleware, requireAdmin);
 
@@ -56,7 +60,7 @@ admin.post("/instances/:id/ws-ticket", requireScope("admin:ws-ticket"), wsTicket
   const id = c.req.param("id");
 
   const parsed = instanceWsTicketSchema.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) {
+  if (!parsed.success || !isServedTicketScope(parsed.data.scope)) {
     return c.json({ error: "Invalid scope" }, 400);
   }
 

@@ -5,9 +5,10 @@
 // instances.ts and admin.ts, which had already drifted (admin.ts's copy was
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
 import { createContainer, findContainerByName, removeContainer, startContainer } from "@/clients/docker";
-import { updateInstance } from "@/clients/supabase";
+import { updateInstance } from "@/clients/streamwizard-api/instances";
 import { broadcastLifecycle } from "@/clients/ws-server";
-import { decryptPassword, encryptPassword, generateVncPassword } from "@/utils/crypto";
+import type { InstanceSecrets } from "@/clients/streamwizard-api/secrets";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { debug, log } from "@/utils/logger";
 import { withInstanceLock } from "@/utils/instance-lock";
 import { pullObsConfig, injectObsWsPassword, injectStreamKey } from "@/services/storage/obs-config";
@@ -17,27 +18,22 @@ import type { Instance } from "@/types";
 
 export class InstanceLifecycleError extends Error {}
 
-// Resolves the plaintext VNC password for this instance, generating and
-// persisting a new one if this instance predates the VNC-password feature
-// (vnc_password_ciphertext is null on rows created before this change).
-// Exported for the novnc ws-ticket routes: the RFB handshake happens
-// directly between the browser's VNC client and x11vnc (the API's WS proxy
-// is a blind byte relay), so the browser needs this password out-of-band --
-// there's no other way for it to authenticate the connection.
-export async function resolveVncPassword(instance: Instance): Promise<string> {
-  if (instance.vnc_password_ciphertext && instance.vnc_password_iv && instance.vnc_password_tag) {
-    return decryptPassword(instance.vnc_password_ciphertext, instance.vnc_password_iv, instance.vnc_password_tag);
+// Loads the instance's plaintext passwords from rest-api (which holds the
+// encryption key). Any failure becomes an InstanceLifecycleError so the start
+// is refused with a clear message, the same way a decrypt failure was before.
+async function loadStartSecrets(instance: Instance): Promise<InstanceSecrets & { obs_ws_password: string }> {
+  let secrets: InstanceSecrets;
+  try {
+    secrets = await getInstanceSecrets(instance.id);
+  } catch (err) {
+    throw new InstanceLifecycleError(
+      `Could not load the instance's passwords from rest-api: ${(err as Error).message}`,
+    );
   }
-
-  const plaintext = generateVncPassword();
-  const encrypted = encryptPassword(plaintext);
-  await updateInstance(instance.id, {
-    vnc_password_ciphertext: encrypted.ciphertext,
-    vnc_password_iv: encrypted.iv,
-    vnc_password_tag: encrypted.tag,
-  });
-  log("info", "generated missing VNC password for instance", { instanceId: instance.id });
-  return plaintext;
+  if (!secrets.obs_ws_password) {
+    throw new InstanceLifecycleError("Instance is missing OBS WebSocket password.");
+  }
+  return { ...secrets, obs_ws_password: secrets.obs_ws_password };
 }
 
 // Brings up (or resumes) an instance's container: pulls its config/plugins,
@@ -81,9 +77,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
   // broadcast and before anything touches S3 or the config dir: a refusal
   // here leaves the instance exactly as it was, so other devices must not be
   // told it's coming up (there'd be no terminal "error"/"stopped" to clear it).
-  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
-    throw new InstanceLifecycleError("Instance is missing OBS WebSocket password.");
-  }
+  const { obs_ws_password: obsWsPassword, vnc_password: vncPassword } = await loadStartSecrets(instance);
   // Throws StreamKeyNotGrantedError when the user has not connected Twitch;
   // every caller (user start, admin start, auto-resume) already treats a
   // throw here as a failed start.
@@ -117,14 +111,6 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
       })
     ),
   ]);
-
-  const obsWsPassword = decryptPassword(
-    instance.obs_ws_password_ciphertext,
-    instance.obs_ws_password_iv,
-    instance.obs_ws_password_tag,
-  );
-
-  const vncPassword = await resolveVncPassword(instance);
 
   await injectObsWsPassword(instance.id, obsWsPassword);
   if (streamKey) await injectStreamKey(instance.id, streamKey);

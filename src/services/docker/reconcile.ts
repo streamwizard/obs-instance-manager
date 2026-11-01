@@ -1,17 +1,12 @@
 import { docker, getContainerStatus } from "@/clients/docker";
-import { updateInstance } from "@/clients/supabase";
-import { StreamwizardApi } from "@/clients/streamwizard-api";
+import { updateInstance } from "@/clients/streamwizard-api/instances";
+import { postReconcileReport, type ReconcileInstanceResult } from "@/clients/streamwizard-api/nodes";
 import { broadcastLifecycle } from "@/clients/ws-server";
 import { refreshNodeInstances } from "@/services/cache/instance-cache";
 import { restartInstance } from "@/services/instances/instance-lifecycle";
 import { trackInstanceEvent } from "@/services/metrics/influx-metrics";
 import { RESTART_STAGGER_MS } from "@/utils/constants";
 import { debug, log } from "@/utils/logger";
-
-export interface ReconcileInstanceResult {
-  instance_id: string;
-  action: "marked_error" | "marked_running" | "marked_stopped" | "restarted" | "restart_failed" | "no_change";
-}
 
 // Boot-time reconciliation: cross-checks running OBS containers against
 // the DB so a restarted API process doesn't operate on stale state (e.g.
@@ -105,7 +100,7 @@ async function reportReconcile(
   }
 
   try {
-    await StreamwizardApi.post("/api/nodes/reconcile", {
+    await postReconcileReport({
       reconciled_at: new Date().toISOString(),
       orphaned_containers: orphanedContainers,
       instances,

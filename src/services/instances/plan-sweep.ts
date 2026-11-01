@@ -2,23 +2,23 @@
 // run them: revoked, set to past_due, or a grant whose expiry passed (nothing
 // fires an event for that last one). rest-api decides who that is; a failed
 // lookup throws, so a rest-api outage stops nothing.
-import { getInstanceByIdAdmin, listUnentitledInstanceIds } from "@/clients/supabase";
+import { getInstanceByIdAdmin, listUnentitledInstanceIds } from "@/clients/streamwizard-api/instances";
 import { stopInstance } from "@/services/instances/stop-instance";
 import { isInstanceLocked } from "@/utils/instance-lock";
 import { PLAN_SWEEP_INTERVAL_MS } from "@/utils/constants";
 import { log } from "@/utils/logger";
 
 // Stops instances whose owner lost their Cloud OBS plan (see PLAN_SWEEP_INTERVAL_MS).
-export function startPlanSweep(nodeId: string): void {
+export function startPlanSweep(): void {
   setInterval(() => {
-    sweepUnentitledInstances(nodeId).catch((err) =>
+    sweepUnentitledInstances().catch((err) =>
       log("error", "plan sweep failed", { error: (err as Error).message }),
     );
   }, PLAN_SWEEP_INTERVAL_MS);
 }
 
-export async function sweepUnentitledInstances(nodeId: string): Promise<string[]> {
-  const ids = await listUnentitledInstanceIds(nodeId);
+export async function sweepUnentitledInstances(): Promise<string[]> {
+  const ids = await listUnentitledInstanceIds();
   const stopped: string[] = [];
   for (const id of ids) {
     // Already starting or stopping: leave it to that operation. The next pass

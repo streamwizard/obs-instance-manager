@@ -131,6 +131,39 @@ Requirements on the host: Docker with the NVIDIA Container Toolkit installed (so
 
 GPU/VRAM metrics are unaffected by any of this — cAdvisor has no per-process GPU support, so VRAM-per-container still comes from cross-referencing `nvidia-smi --query-compute-apps` PIDs against each container's process list (via Docker `top`), run directly inside the `api` container.
 
+## Running the whole stack on a dev box (WSL2 + Docker Desktop)
+
+Runs the manager against the local StreamWizard stack (local Supabase,
+rest-api, web panel) with instance containers that use the box's NVIDIA GPU
+and stream through [Selkies](https://github.com/selkies-project/selkies)
+instead of noVNC. Production nodes are untouched: every new setting below
+defaults to the production value.
+
+WSL2 has no NVIDIA DRM driver, so the shared `gpu-xserver` (real Xorg +
+VirtualGL) cannot run. Instances get the GPU directly instead and OBS renders
+through Mesa's d3d12 driver (`/dev/dxg`); NVENC works as usual. The Selkies
+viewer stream itself is CPU x264, since its hardware encoders need a
+`/dev/dri` render node.
+
+1. Build the instance image in the `obs-cloud-selkies` repo:
+   `docker compose build` (tags `obs-cloud-container-local:selkies`).
+2. Start local Supabase and rest-api in the monorepo
+   (`supabase start`, `cd apps/rest-api && bun run dev`).
+3. Link this box as a node and write `.env.local`:
+   `scripts/local/register-node.sh --park-other-nodes`.
+4. Start the manager: `scripts/local/up.sh` (API on `http://localhost:3100`).
+   `scripts/local/up.sh logs -f api` follows its logs.
+
+| Variable | Production default | Local | Meaning |
+|---|---|---|---|
+| `OBS_INSTANCE_IMAGE` | `ghcr.io/streamwizard/obs-cloud-container:latest` | `obs-cloud-container-local:selkies` | Instance image. |
+| `OBS_VIEWER` | `novnc` | `selkies` | Viewer the instances run and the proxy serves. |
+| `OBS_GPU_MODE` | `xserver` | `direct` | `xserver`: VirtualGL on `gpu-xserver`, bwrap jail. `direct`: GPU handed to the container, no jail privileges. |
+| `OBS_GL_MODE` | (n/a) | `d3d12` | Direct mode only: `d3d12` (WSL2 GPU, mounts `OBS_WSL_LIB_DIR`, default `/usr/lib/wsl`) or `software`. |
+| `SELKIES_*` | (n/a) | | Forwarded to Selkies instances, overriding the defaults in `src/clients/instance-spec.ts`. |
+| `ALLOW_MISSING_STREAM_KEY` | `false` | `true` | Boot without a Twitch stream key instead of refusing. Never on a real node. |
+| `SELKIES_COOKIE_SAMESITE` | `Lax` | `Lax` | Viewer session cookie. `None` (implies Secure) when the panel iframes the node from another site. |
+
 ## Running without Docker Compose
 
 If you'd rather run the API directly with Bun and cAdvisor as a separate container:
@@ -196,7 +229,7 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 
 ## API reference
 
-All `/instances`, `/metrics` and `/admin` REST routes require `Authorization: Bearer <node token>`. A node token is a 60-second Ed25519 JWT that web-admin or web-streamwizard signs for one call: `aud` is this node's id, `scope` is the one action it allows (`instances:control`, `files`, `ws-ticket`, `admin:instances`, ...) and `iid` names the instance on any route with an `:id`. The node verifies it with the public keys it gets from `GET /api/nodes/me` (one key set per environment, so a new node needs no extra config). A token for another node, another scope or another instance is refused (`401`/`403`). `/admin` routes also need `role: "admin"` in the token and the admin role in `user_roles`.
+All `/instances`, `/metrics` and `/admin` REST routes require `Authorization: Bearer <node token>`. A node token is a 60-second Ed25519 JWT that web-admin or web-streamwizard signs for one call: `aud` is this node's id, `scope` is the one action it allows (`instances:control`, `files`, `ws-ticket`, `admin:instances`, ...) and `iid` names the instance on any route with an `:id`. The node verifies it with the public keys it gets from `GET /api/obs-nodes/me` (one key set per environment, so a new node needs no extra config). A token for another node, another scope or another instance is refused (`401`/`403`). `/admin` routes also need `role: "admin"` in the token and the admin role in `user_roles`.
 
 The caller's Supabase session JWT is still accepted, without scope checks, while the web apps switch over; that path will be removed.
 
@@ -234,6 +267,11 @@ WebSocket upgrades (noVNC, obs-websocket, the admin metrics stream) can't send h
 
 - **Auth:** required (`?token=` supported)
 - **Behavior:** same bridge as above, to the instance's internal OBS websocket port (`4455`), for OBS Studio scene/source control.
+
+### `GET /instances/:id/selkies/`
+
+- **Auth:** a ws-ticket with scope `selkies` on the entry URL (`?ticket=`), minted by `POST /instances/:id/ws-ticket`. Only offered when `OBS_VIEWER=selkies`; noVNC nodes answer `400`, and the ticket response carries `viewer` so the panel can tell.
+- **Behavior:** the entry request spends the ticket, sets an 8-hour, HttpOnly session cookie scoped to this instance's path, and redirects to the bare URL. Every other request under the prefix (the Selkies web client, its assets, and the `api/websockets` upgrade) is proxied to the container's port `8080` over `obs-net` with that cookie; incoming cookies and `Authorization` are never forwarded. Meant to be loaded in an iframe. `/admin/instances/:id/selkies/` is the same for admins.
 
 ### `POST /instances/:id/start`
 

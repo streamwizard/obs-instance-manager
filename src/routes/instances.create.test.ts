@@ -5,7 +5,6 @@ import { Hono } from "hono";
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
@@ -18,9 +17,13 @@ const calls = {
   insertToken: [] as (string | null)[],
   delete: [] as string[],
   createContainer: 0,
+  containerPasswords: [] as { obsWsPassword?: string; vncPassword?: string }[],
+  updates: [] as Record<string, unknown>[],
   lifecycle: [] as string[],
 };
 let keyRefused = false;
+let testUser = 0;
+let secretsError: Error | null = null;
 
 class StreamKeyNotGrantedError extends Error {
   readonly code = "stream_key_not_granted";
@@ -28,21 +31,14 @@ class StreamKeyNotGrantedError extends Error {
 
 mock.module("@/middleware/auth", () => ({
   authMiddleware: async (c: any, next: any) => {
-    c.set("userId", "user-1");
+    // Own user per test: the create route rate-limits 5 per user per minute.
+    c.set("userId", `user-${testUser}`);
     c.set("nodeTokenRaw", "node-token-for-user-1");
     await next();
   },
 }));
-mock.module("@/clients/supabase", () => ({
+mock.module("@/clients/streamwizard-api/instances", () => ({
   countActiveInstances: async () => 0,
-  getSubscriptionLimits: async () => ({
-    resolution: "1920x1080",
-    vram_mb: 4096,
-    memory_mb: 4096,
-    cpu_quota: 2,
-    shm_size: "2g",
-    config_template: "1080p30",
-  }),
   insertInstance: async (row: Record<string, unknown>, nodeToken: string | null) => {
     calls.insert.push(row);
     calls.insertToken.push(nodeToken);
@@ -51,10 +47,25 @@ mock.module("@/clients/supabase", () => ({
   deleteInstance: async (id: string) => {
     calls.delete.push(id);
   },
-  updateInstance: async (_id: string, patch: Record<string, unknown>) => ({ ...calls.insert[0], ...patch }),
+  updateInstance: async (_id: string, patch: Record<string, unknown>) => {
+    calls.updates.push(patch);
+    return { ...calls.insert[0], ...patch };
+  },
   getInstanceById: async () => null,
   listUserInstances: async () => [],
+}));
+mock.module("@/clients/streamwizard-api/users", () => ({
   canInteractCloudObs: async () => true,
+}));
+mock.module("@/clients/streamwizard-api/subscriptions", () => ({
+  getSubscriptionLimits: async () => ({
+    resolution: "1920x1080",
+    vram_mb: 4096,
+    memory_mb: 4096,
+    cpu_quota: 2,
+    shm_size: "2g",
+    config_template: "1080p30",
+  }),
 }));
 mock.module("@/services/cache/node-cache", () => ({
   refreshNode: async () => ({ id: "node-1", max_instances: 10, max_encoder_sessions: null }),
@@ -68,8 +79,9 @@ mock.module("@/services/instances/twitch", () => ({
   },
 }));
 mock.module("@/clients/docker", () => ({
-  createContainer: async () => {
+  createContainer: async (opts: { obsWsPassword?: string; vncPassword?: string }) => {
     calls.createContainer++;
+    calls.containerPasswords.push({ obsWsPassword: opts.obsWsPassword, vncPassword: opts.vncPassword });
     return "container-1";
   },
   startContainer: async () => {},
@@ -81,6 +93,8 @@ mock.module("@/clients/docker", () => ({
   stopContainer: async () => {},
   NOVNC_PORT_INTERNAL: 6080,
   OBS_WS_PORT_INTERNAL: 4455,
+  SELKIES_PORT_INTERNAL: 8080,
+  instanceRuntime: { viewer: "novnc" },
 }));
 mock.module("@/clients/ws-server", () => ({
   broadcastLifecycle: (_u: string, _i: string, action: string) => {
@@ -102,9 +116,16 @@ mock.module("@/services/instances/instance-lifecycle", () => ({
   restartInstance: async () => {
     throw new Error("not stubbed");
   },
-  resolveVncPassword: async () => "vnc",
   stopInstance: async () => {
     throw new Error("not stubbed");
+  },
+}));
+
+// rest-api generates the VNC password at insert; the node reads it back.
+mock.module("@/services/cache/instance-secrets-cache", () => ({
+  getInstanceSecrets: async () => {
+    if (secretsError) throw secretsError;
+    return { obs_ws_password: "pw", vnc_password: "vnc-from-rest-api" };
   },
 }));
 
@@ -116,13 +137,14 @@ function makeApp() {
   return app;
 }
 
-function createRequest() {
+function createRequest(extra: Record<string, unknown> = {}) {
   return new Request("http://node/instances", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer x" },
     body: JSON.stringify({
       subscription_id: "8dcfd602-c494-44bf-8a6b-2da84607cfa2",
       obs_ws_password: "pw",
+      ...extra,
     }),
   });
 }
@@ -132,8 +154,12 @@ beforeEach(() => {
   calls.insertToken = [];
   calls.delete = [];
   calls.createContainer = 0;
+  calls.containerPasswords = [];
+  calls.updates = [];
   calls.lifecycle = [];
   keyRefused = false;
+  secretsError = null;
+  testUser++;
 });
 
 test("first-ever create: row is inserted before the stream key lookup, then the container boots", async () => {
@@ -152,7 +178,7 @@ test("stream key refused: 409, the just-inserted row is removed, nothing boots",
   expect(res.status).toBe(409);
   expect(await res.json()).toMatchObject({ code: "stream_key_not_granted" });
   expect(calls.insert).toHaveLength(1);
-  expect(calls.delete).toEqual([calls.insert[0]?.id]);
+  expect(calls.delete).toEqual([calls.insert[0]?.id as string]);
   expect(calls.createContainer).toBe(0);
   expect(calls.lifecycle).toEqual([]);
 });
@@ -161,4 +187,29 @@ test("the user's node token is forwarded with the insert", async () => {
   const res = await makeApp().request(createRequest());
   expect(res.status).toBe(201);
   expect(calls.insertToken).toEqual(["node-token-for-user-1"]);
+});
+
+test("sends the plaintext OBS password to rest-api and never any ciphertext", async () => {
+  // Older web apps still send these; the node must not pass them on.
+  const res = await makeApp().request(
+    createRequest({ obs_ws_password_ciphertext: "c", obs_ws_password_iv: "i", obs_ws_password_tag: "t" }),
+  );
+  expect(res.status).toBe(201);
+  const row = calls.insert[0]!;
+  expect(row.obs_ws_password).toBe("pw");
+  expect(Object.keys(row).filter((k) => k.includes("ciphertext") || k.endsWith("_iv") || k.endsWith("_tag"))).toEqual([]);
+});
+
+test("boots the container with the VNC password rest-api generated", async () => {
+  await makeApp().request(createRequest());
+  expect(calls.containerPasswords).toEqual([{ obsWsPassword: "pw", vncPassword: "vnc-from-rest-api" }]);
+});
+
+test("secrets call fails: 500, the instance is marked error, nothing boots", async () => {
+  secretsError = new Error("Request failed with status code 503");
+  const res = await makeApp().request(createRequest());
+  expect(res.status).toBe(500);
+  expect(calls.createContainer).toBe(0);
+  expect(calls.updates).toContainEqual({ status: "error" });
+  expect(calls.lifecycle).toEqual(["starting", "error"]);
 });

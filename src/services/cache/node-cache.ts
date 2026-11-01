@@ -1,5 +1,4 @@
-import { getNode } from "@/clients/supabase";
-import { NODE_ID } from "@/utils/node";
+import { getNode } from "@/clients/streamwizard-api/nodes";
 import { log } from "@/utils/logger";
 import type { Node } from "@/types";
 
@@ -8,7 +7,7 @@ import type { Node } from "@/types";
 // Every consumer used to fetch it over HTTP: the 10s metrics pass fetched it
 // twice (once for the Influx tags, once more inside getAllMetrics for
 // memory_mb), and each connected dashboard re-fetched it every 3s. That was
-// ~732 GET /api/nodes/me per hour on an idle node, and each one costs the
+// ~732 GET /api/obs-nodes/me per hour on an idle node, and each one costs the
 // rest-api three Supabase reads. The row itself had not changed in 25 days.
 //
 // Nothing on it is operational: id/memory_mb/gpu_bus_id are hardware facts,
@@ -16,9 +15,8 @@ import type { Node } from "@/types";
 // field that legitimately changes is command_key_hash — which is exactly why
 // refreshNode() exists. Read that comment before touching the TTL.
 //
-// A single value, not a Map: getNode ignores its nodeId argument because
-// /api/nodes/me is identity-scoped by NODE_API_KEY, so one process can only
-// ever see one row.
+// A single value, not a Map: /api/obs-nodes/me is identity-scoped by
+// NODE_API_KEY, so one process can only ever see one row.
 
 /** An hour, and that is not casual: the row is write-once in practice (25 days
  *  without an UPDATE across ~440k reads, verified via its updated_at trigger),
@@ -49,7 +47,7 @@ function fetchNode(): Promise<Node> {
   // is a stampede, not a theoretical race.
   if (inFlight) return inFlight;
 
-  inFlight = getNode(NODE_ID)
+  inFlight = getNode()
     .then((node) => {
       cached = node;
       cachedAt = Date.now();

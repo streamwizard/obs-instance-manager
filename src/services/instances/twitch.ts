@@ -1,4 +1,4 @@
-import { apiGetStreamKey, type StreamKeyLookup } from "@/clients/streamwizard-api";
+import { getStreamKey } from "@/clients/streamwizard-api/users";
 import { log } from "@/utils/logger";
 
 /** The user has not granted StreamWizard their stream key on Twitch. */
@@ -7,10 +7,6 @@ export class StreamKeyNotGrantedError extends Error {
   constructor() {
     super("Connect Twitch on the cloud OBS page first so this instance can stream with your key.");
   }
-}
-
-export async function getStreamKey(userId: string): Promise<StreamKeyLookup> {
-  return apiGetStreamKey(userId);
 }
 
 /**
@@ -23,6 +19,12 @@ export async function getStreamKey(userId: string): Promise<StreamKeyLookup> {
 export async function requireStreamKey(userId: string): Promise<string | null> {
   const lookup = await getStreamKey(userId);
   if (lookup.reason === "scope_missing" || lookup.reason === "no_integration") {
+    // Dev boxes: a local test user rarely has Twitch connected with the
+    // stream-key scope. Never set this on a real node.
+    if (process.env.ALLOW_MISSING_STREAM_KEY === "true") {
+      log("warn", "stream key not granted, booting without one (ALLOW_MISSING_STREAM_KEY)", { userId, reason: lookup.reason });
+      return null;
+    }
     throw new StreamKeyNotGrantedError();
   }
   if (lookup.reason === "error" || !lookup.key) {

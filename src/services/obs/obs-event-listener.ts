@@ -2,7 +2,7 @@ import OBSWebSocket, { EventSubscription } from "obs-websocket-js";
 import { instanceTarget, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { refreshNodeInstances } from "@/services/cache/instance-cache";
 import { broadcastSceneChanged } from "@/clients/ws-server";
-import { decryptPassword } from "@/utils/crypto";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { debug, log } from "@/utils/logger";
 import { OBS_EVENT_RESYNC_INTERVAL_MS } from "@/utils/constants";
 import { NODE_ID } from "@/utils/node";
@@ -31,7 +31,6 @@ interface Session {
   instanceId: string;
   userId: string;
   containerName: string;
-  password: string;
   obs: OBSWebSocket | null;
   /** Last scene we broadcast; OBS re-emits during transitions, so we dedupe. */
   lastSceneUuid: string | null;
@@ -69,33 +68,10 @@ export function attachedInstanceIds(): string[] {
 export function attachInstance(instance: Instance): void {
   if (sessions.has(instance.id)) return;
 
-  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
-    log("warn", "cannot watch OBS scenes, instance has no stored websocket password", {
-      instanceId: instance.id,
-    });
-    return;
-  }
-
-  let password: string;
-  try {
-    password = decryptPassword(
-      instance.obs_ws_password_ciphertext,
-      instance.obs_ws_password_iv,
-      instance.obs_ws_password_tag,
-    );
-  } catch (err) {
-    log("error", "cannot watch OBS scenes, password decrypt failed", {
-      instanceId: instance.id,
-      error: (err as Error).message,
-    });
-    return;
-  }
-
   const session: Session = {
     instanceId: instance.id,
     userId: instance.user_id,
     containerName: instance.container_name,
-    password,
     obs: null,
     lastSceneUuid: null,
     attempts: 0,
@@ -185,6 +161,27 @@ export function startSceneListenerSync(): void {
 async function connect(session: Session): Promise<void> {
   if (session.closing) return;
 
+  // Fetched per attempt (cached in memory for a few minutes), not held on the
+  // session: rest-api decrypts it, so a rest-api blip is retried like any
+  // other connect failure.
+  let password: string | null;
+  try {
+    password = (await getInstanceSecrets(session.instanceId)).obs_ws_password;
+  } catch (err) {
+    debug("obs-events", `password lookup failed for ${session.instanceId}: ${(err as Error).message}`);
+    scheduleRetry(session);
+    return;
+  }
+  if (session.closing) return;
+  if (!password) {
+    // Nothing to retry until the row changes; the periodic resync re-attaches.
+    log("warn", "cannot watch OBS scenes, instance has no stored websocket password", {
+      instanceId: session.instanceId,
+    });
+    detachInstance(session.instanceId);
+    return;
+  }
+
   const obs = new OBSWebSocket();
   session.obs = obs;
 
@@ -208,7 +205,7 @@ async function connect(session: Session): Promise<void> {
 
   try {
     await Promise.race([
-      obs.connect(url, session.password, {
+      obs.connect(url, password, {
         rpcVersion: 1,
         eventSubscriptions: EventSubscription.Scenes | EventSubscription.Vendors,
       }),

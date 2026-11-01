@@ -1,19 +1,14 @@
 // Provisioning flow behind POST /instances: capacity checks, row insert,
 // stream-key lookup, config/plugin pull, then container create + start.
-import {
-  countActiveInstances,
-  deleteInstance,
-  getSubscriptionLimits,
-  insertInstance,
-  updateInstance,
-} from "@/clients/supabase";
+import { countActiveInstances, deleteInstance, insertInstance, updateInstance } from "@/clients/streamwizard-api/instances";
+import { getSubscriptionLimits } from "@/clients/streamwizard-api/subscriptions";
 import { createContainer, removeContainer, startContainer } from "@/clients/docker";
 import { broadcastLifecycle } from "@/clients/ws-server";
 import { refreshNode } from "@/services/cache/node-cache";
 import { pullObsConfig, injectStreamKey, injectObsWsPassword } from "@/services/storage/obs-config";
 import { syncPlugins } from "@/services/storage/plugins";
 import { requireStreamKey } from "@/services/instances/twitch";
-import { encryptPassword, generateVncPassword } from "@/utils/crypto";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { debug, log } from "@/utils/logger";
 import type { Instance } from "@/types";
 
@@ -36,9 +31,6 @@ export interface CreateInstanceInput {
   subscriptionId: string;
   template?: string;
   obsWsPassword: string;
-  obsWsPasswordCiphertext: string | null;
-  obsWsPasswordIv: string | null;
-  obsWsPasswordTag: string | null;
   // The caller's instances:create node token, forwarded to rest-api so it can
   // check the user asked for this instance (SW-473). null for a session JWT.
   nodeToken: string | null;
@@ -64,7 +56,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
     throw new CreateInstanceError("Subscription not found or inactive", 400);
   }
 
-  const activeCount = await countActiveInstances(node.id);
+  const activeCount = await countActiveInstances();
   if (activeCount >= node.max_instances) {
     throw new CreateInstanceError("Node has reached max_instances capacity", 409);
   }
@@ -87,13 +79,6 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
   const instanceId = crypto.randomUUID();
   const containerName = `obs-instance-${instanceId}`;
 
-  // Generated and encrypted server-side (unlike obsWsPassword, which the
-  // client generates/encrypts today) since the VNC password never needs to
-  // be seen by the panel -- x11vnc's RFB auth is purely an internal
-  // obs-net-isolation measure, not something the end user interacts with.
-  const vncPassword = generateVncPassword();
-  const encryptedVncPassword = encryptPassword(vncPassword);
-
   await insertInstance({
     id: instanceId,
     user_id: userId,
@@ -108,12 +93,8 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
     shm_size: planLimits.shm_size,
     config_template: planLimits.config_template ?? null,
     subscription_id: subscriptionId,
-    obs_ws_password_ciphertext: input.obsWsPasswordCiphertext,
-    obs_ws_password_iv: input.obsWsPasswordIv,
-    obs_ws_password_tag: input.obsWsPasswordTag,
-    vnc_password_ciphertext: encryptedVncPassword.ciphertext,
-    vnc_password_iv: encryptedVncPassword.iv,
-    vnc_password_tag: encryptedVncPassword.tag,
+    // Plaintext; rest-api encrypts it and generates the VNC password.
+    obs_ws_password: obsWsPassword,
   }, input.nodeToken);
 
   // After the row insert, not before: rest-api only releases a user's stream
@@ -155,6 +136,10 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
         })
       ),
     ]);
+
+    // rest-api generated the VNC password when it stored the row; this node
+    // only ever gets it in plaintext, for its own instances.
+    const { vnc_password: vncPassword } = await getInstanceSecrets(instanceId);
 
     await injectObsWsPassword(instanceId, obsWsPassword);
 

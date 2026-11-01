@@ -58,7 +58,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    `docker-compose.yml`) and then calls:
 
    ```
-   POST {rest-api-url}/api/nodes/claim
+   POST {rest-api-url}/api/obs-nodes/claim
    Content-Type: application/json
 
    {
@@ -98,8 +98,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "rest_api_url": "https://api.example.com",
      "supabase_url": "https://xxxx.supabase.co",
      "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
-     "S3_BUCKET": "...", "S3_REGION": "...",
-     "TOKEN_ENCRYPTION_KEY": "..."
+     "S3_BUCKET": "...", "S3_REGION": "..."
    }
    ```
 
@@ -107,7 +106,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
    reports its address back on its own authenticated round trip:
 
    ```
-   PATCH {rest-api-url}/api/nodes/me
+   PATCH {rest-api-url}/api/obs-nodes/me
    Authorization: Bearer <node_api_key>
    Content-Type: application/json
 
@@ -152,7 +151,7 @@ non-fatal: if the Tailscale API is unreachable or the OAuth client isn't
 scoped for the tag, `/claim` still succeeds and returns
 `tailscale_authkey: null`; `install.sh` then warns and tells the admin to run
 `tailscale up` by hand, add the ufw rule, set `TAILSCALE_IP` in `.env`, and
-call `PATCH /api/nodes/me` themselves.
+call `PATCH /api/obs-nodes/me` themselves.
 
 Tailnet prerequisites (one-off, in the Tailscale admin console):
 
@@ -217,9 +216,10 @@ and expose a way to force-close them.
 
 An earlier version of this doc flagged that every node received the global
 Supabase service-role key and called Supabase directly, bypassing RLS. That's
-no longer the case: `src/clients/supabase.ts` is now a thin wrapper around
-`src/clients/streamwizard-api.ts`, which calls the panel's `/api/nodes/*`
-endpoints using the node's own `NODE_API_KEY` instead. Each node's blast
+no longer the case: all database access goes through
+`src/clients/streamwizard-api/` (one module per domain: `nodes`, `instances`,
+`users`, `subscriptions`), which calls the panel's `/api/obs-nodes/*` endpoints
+using the node's own `NODE_API_KEY` instead. Each node's blast
 radius is now whatever those node-scoped endpoints expose, not the whole
 database.
 
@@ -271,10 +271,14 @@ alter table obs_instances
 — the concurrent-NVENC-session cap the driver enforces regardless of VRAM
 headroom — and left `null` (unlimited) for Quadro/RTX-A nodes, which have no
 such cap. `vnc_password_*` mirrors the existing `obs_ws_password_*` columns'
-shape but is generated and encrypted server-side by obs-instance-manager
-itself rather than by the panel, since the VNC password is purely an
-obs-net isolation measure (see entrypoint.sh's `x11vnc -rfbauth`) that the
-end user never needs to see.
+shape. rest-api generates and encrypts it when the node creates the row; the
+VNC password is purely an obs-net isolation measure (see entrypoint.sh's
+`x11vnc -rfbauth`) that the end user never needs to see.
+
+The node never holds `TOKEN_ENCRYPTION_KEY` and never sees these encrypted
+columns. It sends the plaintext OBS WebSocket password on create and reads
+both passwords back, in plaintext and only for its own instances, from
+`GET /api/obs-nodes/instances/:id/secrets`.
 
 Note: an earlier version of this doc also had this migration add an
 `admin_token` column, used to authenticate a panel-side relay for
