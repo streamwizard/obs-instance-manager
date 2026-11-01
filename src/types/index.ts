@@ -50,12 +50,8 @@ export interface Instance {
   cpu_quota: number;
   shm_size: string;
   subscription_id: string | null;
-  obs_ws_password_ciphertext: string | null;
-  obs_ws_password_iv: string | null;
-  obs_ws_password_tag: string | null;
-  vnc_password_ciphertext: string | null;
-  vnc_password_iv: string | null;
-  vnc_password_tag: string | null;
+  // No password columns: rest-api never sends them to a node. The plaintext
+  // OBS WebSocket / VNC passwords come from services/cache/instance-secrets-cache.
   storage_quota_mb: number;
   used_storage_bytes: number;
   // Names the plan-owned OBS template folder in S3 (obs-templates/<name>/) whose

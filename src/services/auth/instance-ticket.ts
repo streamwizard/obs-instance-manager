@@ -1,5 +1,5 @@
 import { issueTicket } from "@/services/auth/ws-tickets";
-import { resolveVncPassword } from "@/services/instances/instance-lifecycle";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import type { InstanceWsTicketScope } from "@/schemas/ws-ticket";
 import type { Instance } from "@/types";
 
@@ -28,8 +28,9 @@ export async function mintInstanceTicket(
   const ticket = issueTicket({ userId, scope, instanceId: instance.id });
 
   if (scope === "novnc") {
-    const vncPassword = await resolveVncPassword(instance);
-    return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS, vnc_password: vncPassword };
+    // rest-api decrypts it (and creates one for old rows that have none).
+    const { vnc_password } = await getInstanceSecrets(instance.id);
+    return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS, vnc_password };
   }
 
   return { ticket, expires_in: TICKET_EXPIRES_IN_SECONDS };

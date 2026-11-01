@@ -1,6 +1,6 @@
 import OBSWebSocket from "obs-websocket-js";
 import { instanceTarget, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
-import { decryptPassword } from "@/utils/crypto";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { debug, log } from "@/utils/logger";
 import type { Instance } from "@/types";
 
@@ -82,15 +82,15 @@ export async function executeObsCommands(instance: Instance, commands: ObsComman
   if (instance.status !== "running") {
     throw new ObsCommandError(`Instance is not running (status: ${instance.status})`, 409);
   }
-  if (!instance.obs_ws_password_ciphertext || !instance.obs_ws_password_iv || !instance.obs_ws_password_tag) {
+  let password: string | null;
+  try {
+    password = (await getInstanceSecrets(instance.id)).obs_ws_password;
+  } catch (err) {
+    throw new ObsCommandError(`Could not load the instance's OBS WebSocket password: ${(err as Error).message}`, 502);
+  }
+  if (!password) {
     throw new ObsCommandError("Instance is missing OBS WebSocket password", 502);
   }
-
-  const password = decryptPassword(
-    instance.obs_ws_password_ciphertext,
-    instance.obs_ws_password_iv,
-    instance.obs_ws_password_tag,
-  );
   const url = `ws://${instanceTarget(instance.container_name, OBS_WS_PORT_INTERNAL)}`;
 
   return serialize(instance.id, async () => {

@@ -5,7 +5,6 @@ import { Hono } from "hono";
 process.env.S3_ENDPOINT ??= "http://127.0.0.1:1";
 process.env.S3_ACCESS_KEY ??= "test";
 process.env.S3_SECRET_KEY ??= "test";
-process.env.TOKEN_ENCRYPTION_KEY ??= "0".repeat(64);
 process.env.NODE_ID ??= "test-node";
 process.env.REST_API_URL ??= "http://127.0.0.1:1";
 process.env.NODE_API_KEY ??= "test";
@@ -111,7 +110,6 @@ mock.module("@/services/instances/instance-lifecycle", () => ({
     restarted.push(instance.id as string);
     return { ...instance, status: "running" };
   },
-  resolveVncPassword: async () => "vnc",
 }));
 
 const { default: instances } = await import("./instances");

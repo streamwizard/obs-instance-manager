@@ -103,9 +103,6 @@ instances.post(
         subscriptionId: body.subscription_id,
         template: body.template,
         obsWsPassword: body.obs_ws_password,
-        obsWsPasswordCiphertext: body.obs_ws_password_ciphertext ?? null,
-        obsWsPasswordIv: body.obs_ws_password_iv ?? null,
-        obsWsPasswordTag: body.obs_ws_password_tag ?? null,
         nodeToken: c.get("nodeTokenRaw") ?? null,
       });
       return c.json(created, 201);

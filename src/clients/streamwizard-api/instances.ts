@@ -4,6 +4,7 @@ import type { Instance } from "@/types";
 // this module) — harmless: both sides only call across the boundary at
 // runtime, never during module evaluation.
 import { invalidateNodeInstances } from "@/services/cache/instance-cache";
+import { forgetInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { StreamwizardApi, nullOn404 } from "./client";
 
 /** Every instance hosted on this node. */
@@ -53,8 +54,11 @@ export async function getInstanceByIdAdmin(instanceId: string): Promise<Instance
 // nodeToken is the user's instances:create token from the web app. rest-api
 // takes user_id from this body, and the token is what proves that user asked
 // for the instance (SW-473); our own API key can't.
+//
+// obs_ws_password is plaintext: rest-api encrypts it and generates the VNC
+// password itself. Read both back with getInstanceSecrets().
 export async function insertInstance(
-  instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes">,
+  instance: Omit<Instance, "created_at" | "storage_quota_mb" | "used_storage_bytes"> & { obs_ws_password: string },
   nodeToken: string | null,
 ): Promise<Instance> {
   const res = await StreamwizardApi.post<Instance>("/api/obs-nodes/instances", instance, {
@@ -84,4 +88,5 @@ export async function updateInstanceByContainerId(
 export async function deleteInstance(instanceId: string): Promise<void> {
   await StreamwizardApi.delete(`/api/obs-nodes/instances/${instanceId}`);
   invalidateNodeInstances();
+  forgetInstanceSecrets(instanceId);
 }
