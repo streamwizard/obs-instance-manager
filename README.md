@@ -1,6 +1,6 @@
 # OBS Cloud Panel API
 
-REST API backend that manages OBS cloud containers on demand. Each container runs a headless OBS Studio instance (Xorg, NVIDIA GPU, x11vnc, noVNC) and is owned by a single Supabase-authenticated user. The backend also streams per-container and host resource metrics in real time over SSE.
+REST API backend that manages OBS cloud containers on demand. Each container runs a headless OBS Studio instance (Xorg, NVIDIA GPU, x11vnc, noVNC) and is owned by a single StreamWizard user. The backend also streams per-container and host resource metrics in real time over SSE.
 
 Instance containers publish no ports to the host at all — noVNC and the OBS
 websocket are reached by proxying through this API itself
@@ -33,7 +33,7 @@ from a branch or tag other than `main`.
 By default it only opens SSH to your auto-detected LAN network (override with
 `--ssh-cidr`), allows the API port in on `tailscale0` only, and expects you
 to fill in `.env` by hand afterward (`NODE_ID`, `NODE_API_KEY`,
-`REST_API_URL`, `SUPABASE_URL`, `TAILSCALE_IP`). Pass `--tailscale-authkey`
+`REST_API_URL`, `TAILSCALE_IP`). Pass `--tailscale-authkey`
 to have it join the tailnet for you in this manual mode. If a panel
 implementing the claim handshake in `docs/PANEL_INTEGRATION.md` exists, pass
 `--rest-api-url` and `--token` instead: the script links itself, joins
@@ -102,9 +102,8 @@ always asks for confirmation first unless `--yes` is given.
 - Docker, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed and the `nvidia` runtime registered with the Docker daemon
 - `nvidia-smi` available on the host running this API (used directly via the CLI for GPU metrics)
 - [cAdvisor](https://github.com/google/cadvisor) running on the host, used for per-container CPU/RAM metrics (see below)
-- A Supabase project (local or hosted)
 
-`scripts/install.sh` handles all of the above except the Supabase project.
+`scripts/install.sh` handles all of the above.
 
 ## Running everything with Docker Compose
 
@@ -112,7 +111,7 @@ The included `docker-compose.yml` pulls the prebuilt API image and runs it along
 
 ```bash
 cp .env.example .env
-# fill in .env with your Supabase project values and this node's NODE_ID
+# fill in .env with this node's NODE_ID, NODE_API_KEY and REST_API_URL
 docker compose up -d
 ```
 
@@ -184,7 +183,7 @@ Set `CADVISOR_URL` (default `http://localhost:8080`) if it's reachable somewhere
 ```bash
 bun install
 cp .env.example .env
-# fill in .env with your Supabase project values
+# fill in .env with this node's NODE_ID, NODE_API_KEY and REST_API_URL
 ```
 
 ## Database schema
@@ -214,7 +213,6 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 | Variable | Description |
 |---|---|
 | `NODE_ID` | The `obs_nodes.id` row this process represents. Required — every instance-manager process serves exactly one node. |
-| `SUPABASE_URL` | Supabase project URL |
 | `NODE_API_KEY` | This node's key for authenticating to `streamwizard-api` (issued by the panel at claim time) |
 | `REST_API_URL` | Base URL of the panel's `streamwizard-api` |
 | `PORT` | Port the API listens on (default `3000`) |

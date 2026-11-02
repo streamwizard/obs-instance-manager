@@ -96,7 +96,6 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "hostname": "gpu-box-1",
      "tailscale_authkey": "<single-use, tag:obs-node key, or null>",
      "rest_api_url": "https://api.example.com",
-     "supabase_url": "https://xxxx.supabase.co",
      "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
      "S3_BUCKET": "...", "S3_REGION": "..."
    }
@@ -165,21 +164,18 @@ Tailnet prerequisites (one-off, in the Tailscale admin console):
 
 ## Realtime admin metrics
 
-Every node exposes `GET /admin/metrics/stream` — a WebSocket, authenticated
-the same way as every end-user `/metrics/*` route: a Supabase JWT
-(`Authorization: Bearer <token>` or `?token=<token>`), checked in
-`src/routes/admin.ts`. The only difference from the end-user routes is the
-authorization check — instead of "does this JWT's user own this instance",
-it's "does this JWT's user have the `admin` role in `user_roles`" (a plain
-service-role query the node already has the credentials to run). `403` if
-the JWT is valid but the user isn't an admin. On connect it pushes a
+Every node exposes `GET /admin/metrics/stream` — a WebSocket. Like every
+other WebSocket on the node it authenticates with a 30-second single-use
+`?ticket=`, minted by `POST /admin/ws-ticket` (see `src/routes/admin.ts`).
+That mint route needs a node token with scope `admin:ws-ticket` and
+`role: "admin"`; `403` otherwise. On connect the stream pushes a
 `MetricsPayload` (same shape as `/metrics/snapshot`, but for **every**
 instance on the node, not scoped to one end user) immediately and then
 every 3 seconds for as long as the connection stays open.
 
-Because this is gated by the caller's own admin-scoped JWT rather than a
+Because the ticket comes from the admin's own node token rather than a
 separate node-wide secret, an admin's browser can open this websocket
-**directly** — `ws://{api_url}/admin/metrics/stream?token={supabase_jwt}` —
+**directly** — `ws://{api_url}/admin/metrics/stream?ticket={ticket}` —
 the same way an end user's browser connects directly to `/metrics/stream`,
 `/instances/:id/novnc`, and `/instances/:id/obsws`. No panel-side relay or
 node-wide credential is needed. `api_url` defaults to the node's tailnet
@@ -206,8 +202,9 @@ Wings had a real vulnerability (CVE-2025-68954) where revoking a user's
 access didn't close their already-open sessions. The fix was a Panel→Wings
 `POST /api/deauthorize-user` call that force-closes that user's live
 connections immediately. We have the same exposure: a user's `/instances/:id/novnc`
-or `/instances/:id/obsws` websocket stays open until their Supabase JWT
-expires, even if their access is revoked in the meantime. The node-side fix
+or `/instances/:id/obsws` websocket stays open until it closes, even if
+their access is revoked in the meantime (the ticket is only checked at the
+upgrade). The node-side fix
 is straightforward once there's a reason to add an authenticated
 node-control endpoint — track open proxy connections by `userId` in memory
 and expose a way to force-close them.
@@ -283,5 +280,5 @@ both passwords back, in plaintext and only for its own instances, from
 Note: an earlier version of this doc also had this migration add an
 `admin_token` column, used to authenticate a panel-side relay for
 `/admin/metrics/stream`. That's gone now — see "Realtime admin metrics"
-above — the admin browser connects directly using its own Supabase JWT,
+above — the admin browser connects directly with a ws-ticket from its own node token,
 so no separate node-wide secret or relay is needed.
