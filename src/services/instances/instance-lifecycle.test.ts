@@ -53,8 +53,8 @@ mock.module("@/clients/streamwizard-api/instances", () => ({
     return { ...instance, ...patch };
   },
 }));
-mock.module("@/clients/ws-server", () => ({
-  broadcastLifecycle: (_u: string, _i: string, action: string) => {
+mock.module("@/clients/streamwizard-api/events", () => ({
+  broadcastLifecycle: (_i: string, action: string) => {
     calls.lifecycle.push(action);
   },
 }));

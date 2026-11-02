@@ -1,6 +1,6 @@
 import { docker, isApiStopping } from "@/clients/docker";
 import { getInstanceByIdAdmin, updateInstanceByContainerId } from "@/clients/streamwizard-api/instances";
-import { broadcastLifecycle } from "@/clients/ws-server";
+import { broadcastLifecycle } from "@/clients/streamwizard-api/events";
 import { trackInstanceEvent } from "@/services/metrics/influx-metrics";
 import { attachInstance, detachInstance } from "@/services/obs/obs-event-listener";
 import { persistAndRemoveLocalConfig } from "@/services/storage/obs-config";
@@ -118,7 +118,7 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
   // Out-of-band exit (crash, OOM, manual `docker stop`) -- API-initiated stops
   // are filtered out above via isApiStopping, so this only fires for
   // deaths the routes never see. updated is the only place user_id is in scope.
-  broadcastLifecycle(updated.user_id, updated.id, status === "error" ? "error" : "stopped");
+  broadcastLifecycle(updated.id, status === "error" ? "error" : "stopped");
 
   log("info", "instance container exited, synced status", {
     instanceId: updated.id,

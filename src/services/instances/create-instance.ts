@@ -3,7 +3,7 @@
 import { countActiveInstances, deleteInstance, insertInstance, updateInstance } from "@/clients/streamwizard-api/instances";
 import { getSubscriptionLimits } from "@/clients/streamwizard-api/subscriptions";
 import { createContainer, removeContainer, startContainer } from "@/clients/docker";
-import { broadcastLifecycle } from "@/clients/ws-server";
+import { broadcastLifecycle } from "@/clients/streamwizard-api/events";
 import { refreshNode } from "@/services/cache/node-cache";
 import { pullObsConfig, injectStreamKey, injectObsWsPassword } from "@/services/storage/obs-config";
 import { syncPlugins } from "@/services/storage/plugins";
@@ -118,7 +118,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
 
   // Leading-edge signal for the fresh-launch flow (status "creating"): show
   // "Starting…" on every device while the container is provisioned.
-  broadcastLifecycle(userId, instanceId, "starting");
+  broadcastLifecycle(instanceId, "starting");
 
   let containerId: string | null = null;
   try {
@@ -162,12 +162,12 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
       status: "running",
     });
 
-    broadcastLifecycle(userId, instanceId, "started");
+    broadcastLifecycle(instanceId, "started");
     return updated;
   } catch (err) {
     log("error", "instance create failed", { instanceId, error: (err as Error).message });
     await updateInstance(instanceId, { status: "error" });
-    broadcastLifecycle(userId, instanceId, "error");
+    broadcastLifecycle(instanceId, "error");
     if (containerId) {
       await removeContainer(containerId).catch((e) =>
         debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`),

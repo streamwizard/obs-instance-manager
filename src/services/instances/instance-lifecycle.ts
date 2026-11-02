@@ -6,7 +6,7 @@
 // missing the syncPlugins()/stream-key-injection steps the end-user route had).
 import { createContainer, findContainerByName, removeContainer, startContainer } from "@/clients/docker";
 import { updateInstance } from "@/clients/streamwizard-api/instances";
-import { broadcastLifecycle } from "@/clients/ws-server";
+import { broadcastLifecycle } from "@/clients/streamwizard-api/events";
 import type { InstanceSecrets } from "@/clients/streamwizard-api/secrets";
 import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { debug, log } from "@/utils/logger";
@@ -61,7 +61,7 @@ async function adoptRunningContainer(instance: Instance, containerId: string): P
     containerId,
   });
   const updated = await updateInstance(instance.id, { container_id: containerId, status: "running" });
-  broadcastLifecycle(instance.user_id, instance.id, "started");
+  broadcastLifecycle(instance.id, "started");
   return updated;
 }
 
@@ -85,7 +85,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
 
   // Leading-edge signal: the box is coming up. Lets other devices show
   // "Starting…" during the provisioning/boot wait instead of nothing.
-  broadcastLifecycle(instance.user_id, instance.id, "starting");
+  broadcastLifecycle(instance.id, "starting");
 
   if (existing) {
     // Exited/dead leftover (crash mid-start, stop that never got to remove).
@@ -131,7 +131,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
     const updated = await updateInstance(instance.id, { container_id: containerId, status: "running" });
     // Covers every start path funnelling through here: user start, admin start,
     // reconcile auto-resume, and gpu-xserver recovery.
-    broadcastLifecycle(instance.user_id, instance.id, "started");
+    broadcastLifecycle(instance.id, "started");
     return updated;
   } catch (err) {
     log("error", "instance start failed", { instanceId: instance.id, error: (err as Error).message });
@@ -156,7 +156,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
     }
 
     await updateInstance(instance.id, { status: "error" });
-    broadcastLifecycle(instance.user_id, instance.id, "error");
+    broadcastLifecycle(instance.id, "error");
     throw err;
   }
 }

@@ -92,11 +92,9 @@ mock.module("@/clients/docker", () => ({
   stopContainer: async () => {},
   NOVNC_PORT_INTERNAL: 6080,
   OBS_WS_PORT_INTERNAL: 4455,
-  SELKIES_PORT_INTERNAL: 8080,
-  instanceRuntime: { viewer: "novnc" },
 }));
-mock.module("@/clients/ws-server", () => ({
-  broadcastLifecycle: (_u: string, _i: string, action: string) => {
+mock.module("@/clients/streamwizard-api/events", () => ({
+  broadcastLifecycle: (_i: string, action: string) => {
     calls.lifecycle.push(action);
   },
 }));

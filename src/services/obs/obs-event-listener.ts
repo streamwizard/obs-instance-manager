@@ -1,7 +1,7 @@
 import OBSWebSocket, { EventSubscription } from "obs-websocket-js";
 import { instanceTarget, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { refreshNodeInstances } from "@/services/cache/instance-cache";
-import { broadcastSceneChanged } from "@/clients/ws-server";
+import { broadcastSceneChanged } from "@/clients/streamwizard-api/events";
 import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { debug, log } from "@/utils/logger";
 import { OBS_EVENT_RESYNC_INTERVAL_MS } from "@/utils/constants";
@@ -257,7 +257,7 @@ function emitScene(session: Session, sceneName: string | undefined, sceneUuid: s
   if (sceneUuid === session.lastSceneUuid) return;
 
   session.lastSceneUuid = sceneUuid;
-  broadcastSceneChanged(session.userId, session.instanceId, sceneName, sceneUuid);
+  broadcastSceneChanged(session.instanceId, sceneName, sceneUuid);
   debug("obs-events", `${session.instanceId} scene -> ${sceneName}`);
 }
 
