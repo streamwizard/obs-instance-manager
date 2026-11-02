@@ -53,39 +53,22 @@ test("no env set: exactly the production container createContainer always built"
   });
 });
 
-test("selkies + direct GPU: no VNC, no gpu-xserver, no bwrap privileges, WSL libs mounted", () => {
+test("direct GPU: noVNC, no gpu-xserver, no bwrap privileges, WSL libs mounted", () => {
   const rt = runtimeFromEnv({
-    OBS_INSTANCE_IMAGE: "obs-cloud-container-local:selkies",
-    OBS_VIEWER: "selkies",
+    OBS_INSTANCE_IMAGE: "obs-cloud-container-local:dev",
     OBS_GPU_MODE: "direct",
+    OBS_GL_MODE: "d3d12",
     OBS_CONFIG_BASE: "/work/.local-data/obs-configs",
     PLUGINS_PATH: "/work/.local-data/obs-plugins",
-    SELKIES_VIDEO_CRF: "25",
-    SELKIES_ENABLE_BASIC_AUTH: "true",
   });
   const spec = buildContainerSpec({ ...input, resolution: "1280x720" }, rt);
   const env = spec.Env ?? [];
   const host = spec.HostConfig ?? {};
 
-  expect(spec.Image).toBe("obs-cloud-container-local:selkies");
-  expect(env.some((e) => e.startsWith("VNC_"))).toBe(false);
+  expect(spec.Image).toBe("obs-cloud-container-local:dev");
+  expect(env).toContain("VNC_PASSWORD=vnc-pw");
+  expect(env).toContain("NOVNC_PORT=6080");
   expect(env).toContain("OBS_GL_MODE=d3d12");
-  expect(env).toContain("SELKIES_MANUAL_WIDTH=1280");
-  expect(env).toContain("SELKIES_MANUAL_HEIGHT=720");
-  // Fixed viewer: no sidebar, no sharing links, no file transfer.
-  expect(env).toContain("SELKIES_UI_SHOW_SIDEBAR=false");
-  expect(env).toContain("SELKIES_ENABLE_SHARING=false");
-  expect(env).toContain("SELKIES_FILE_TRANSFERS=");
-  // Locks in the syntax Selkies parses; "|locked" on a range or list is
-  // rejected and replaced by the default.
-  expect(env).toContain("SELKIES_ENCODER=h264enc-striped");
-  expect(env).toContain("SELKIES_FRAMERATE=30-30");
-  expect(env.filter((e) => /^SELKIES_(ENCODER|FRAMERATE|VIDEO_CRF)=.*\|locked/.test(e))).toEqual([]);
-  // Overrides win over the defaults...
-  expect(env).toContain("SELKIES_VIDEO_CRF=25");
-  // ...except basic auth, which the proxy replaces.
-  expect(env).toContain("SELKIES_ENABLE_BASIC_AUTH=false");
-  expect(env).not.toContain("SELKIES_ENABLE_BASIC_AUTH=true");
 
   expect(host.Runtime).toBeUndefined();
   expect(host.CapAdd).toBeUndefined();
@@ -96,7 +79,7 @@ test("selkies + direct GPU: no VNC, no gpu-xserver, no bwrap privileges, WSL lib
     "/usr/lib/wsl:/usr/lib/wsl:ro",
     "/work/.local-data/obs-configs/inst-1/media:/home/app/media",
   ]);
-  expect(spec.ExposedPorts).toEqual({ "8080/tcp": {}, "4455/tcp": {} });
+  expect(spec.ExposedPorts).toEqual({ "5900/tcp": {}, "6080/tcp": {}, "4455/tcp": {} });
 });
 
 test("software GL in direct mode skips the WSL mount", () => {
@@ -106,6 +89,5 @@ test("software GL in direct mode skips the WSL mount", () => {
 });
 
 test("a typo in a mode fails loudly instead of silently falling back", () => {
-  expect(() => runtimeFromEnv({ OBS_VIEWER: "selkie" })).toThrow(/OBS_VIEWER/);
   expect(() => runtimeFromEnv({ OBS_GPU_MODE: "wsl" })).toThrow(/OBS_GPU_MODE/);
 });

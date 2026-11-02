@@ -8,8 +8,7 @@ import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { createInstanceSchema } from "@/schemas/instance";
 import { instanceWsTicketSchema } from "@/schemas/ws-ticket";
 import { proxyRoute } from "@/services/proxy/ws-proxy";
-import { isServedTicketScope, mintInstanceTicket } from "@/services/auth/instance-ticket";
-import { selkiesProxy } from "@/services/proxy/selkies-proxy";
+import { mintInstanceTicket } from "@/services/auth/instance-ticket";
 import { createInstance, CreateInstanceError, InstanceProvisionError } from "@/services/instances/create-instance";
 import { stopInstance } from "@/services/instances/stop-instance";
 import { destroyInstance } from "@/services/instances/destroy-instance";
@@ -39,16 +38,12 @@ const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
 // JWT check is skipped for them while every REST route still goes through it.
 instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 2000, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
 instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id, ticket) => getInstanceById(id, ticket.userId)));
-// Selkies viewer (HTTP + WS), gated by its own ticket-then-cookie session.
-const userSelkies = selkiesProxy((id, ticket) => getInstanceById(id, ticket.userId));
-instances.all("/:id/selkies", userSelkies);
-instances.all("/:id/selkies/*", userSelkies);
 
 instances.use("*", authMiddleware);
 
 // Mints a short-lived, single-use ticket that the browser then puts on the WS
 // URL (?ticket=...). Ownership is enforced here while the real credential (a
-// node token, or the legacy session JWT) is still in the Authorization header,
+// node token) is still in the Authorization header,
 // so it never rides on the socket.
 instances.post(
   "/:id/ws-ticket",
@@ -59,7 +54,7 @@ instances.post(
     const id = c.req.param("id");
 
     const parsed = instanceWsTicketSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success || !isServedTicketScope(parsed.data.scope)) {
+    if (!parsed.success) {
       return c.json({ error: "Invalid scope" }, 400);
     }
 

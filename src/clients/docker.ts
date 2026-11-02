@@ -29,9 +29,9 @@ export function isApiStopping(containerId: string): boolean {
   return apiStoppingContainers.has(containerId);
 }
 
-// Image, viewer (noVNC or Selkies) and GPU wiring for instance containers.
+// Image and GPU wiring for instance containers.
 // All default to production; see instance-spec.ts for the dev-box values.
-export const instanceRuntime = runtimeFromEnv();
+const instanceRuntime = runtimeFromEnv();
 
 // Shared user-defined network joined by both the api container and every
 // instance container, so the api can reach instances by container name over
@@ -42,7 +42,6 @@ export {
   VNC_PORT_INTERNAL,
   NOVNC_PORT_INTERNAL,
   OBS_WS_PORT_INTERNAL,
-  SELKIES_PORT_INTERNAL,
 } from "./instance-spec";
 
 export { docker };
