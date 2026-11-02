@@ -29,8 +29,12 @@ class StreamKeyNotGrantedError extends Error {
 }
 
 mock.module("@/middleware/auth", () => ({
+  // A node token for this exact start, as authMiddleware would set it.
   authMiddleware: async (c: any, next: any) => {
+    const instanceId = new URL(c.req.url).pathname.split("/")[2] ?? null;
     c.set("userId", "user-1");
+    c.set("nodeToken", { userId: "user-1", scope: "instances:control", instanceId, role: "user" });
+    c.set("nodeTokenRaw", "node-token");
     await next();
   },
 }));

@@ -227,7 +227,7 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 
 All `/instances`, `/metrics` and `/admin` REST routes require `Authorization: Bearer <node token>`. A node token is a 60-second Ed25519 JWT that web-admin or web-streamwizard signs for one call: `aud` is this node's id, `scope` is the one action it allows (`instances:control`, `files`, `ws-ticket`, `admin:instances`, ...) and `iid` names the instance on any route with an `:id`. The node verifies it with the public keys it gets from `GET /api/obs-nodes/me` (one key set per environment, so a new node needs no extra config). A token for another node, another scope or another instance is refused (`401`/`403`). `/admin` routes also need `role: "admin"` in the token and the admin role in `user_roles`.
 
-The caller's Supabase session JWT is still accepted, without scope checks, while the web apps switch over; that path will be removed.
+A Supabase session JWT is not accepted: every call needs a node token.
 
 WebSocket upgrades (noVNC, obs-websocket, the admin metrics stream) can't send headers, so they use a 30-second single-use `?ticket=` from the matching `POST .../ws-ticket` route instead.
 

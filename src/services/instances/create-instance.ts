@@ -32,7 +32,7 @@ export interface CreateInstanceInput {
   template?: string;
   obsWsPassword: string;
   // The caller's instances:create node token, forwarded to rest-api so it can
-  // check the user asked for this instance (SW-473). null for a session JWT.
+  // check the user asked for this instance (SW-473).
   nodeToken: string | null;
 }
 

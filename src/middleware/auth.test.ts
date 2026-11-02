@@ -3,7 +3,6 @@ import { Hono } from "hono";
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
 import type { AppVariables, Node } from "@/types";
 
-process.env.SUPABASE_URL ??= "http://127.0.0.1:1";
 process.env.NODE_ID ??= "node-a";
 
 const ISSUER = "streamwizard-node-token";
@@ -52,13 +51,13 @@ app.post("/instances/:id/start", requireScope("instances:control"), (c) =>
 );
 app.get("/instances", requireScope("instances:read"), (c) => c.json({ ok: true }));
 
-const legacy = new Hono<{ Variables: AppVariables }>();
-legacy.use("*", async (c, next) => {
+// A route reached without a node token (e.g. mounted before authMiddleware).
+const noToken = new Hono<{ Variables: AppVariables }>();
+noToken.use("*", async (c, next) => {
   c.set("userId", "user-1");
-  c.set("nodeToken", null);
   await next();
 });
-legacy.post("/instances/:id/start", requireScope("instances:control"), (c) => c.json({ ok: true }));
+noToken.post("/instances/:id/start", requireScope("instances:control"), (c) => c.json({ ok: true }));
 
 interface Claims {
   aud?: string;
@@ -190,16 +189,18 @@ describe("node tokens", () => {
   });
 });
 
-describe("legacy session JWT", () => {
-  it("is still verified against Supabase, not as a node token", async () => {
-    const bogus = `${Buffer.from(JSON.stringify({ alg: "ES256" })).toString("base64url")}.${Buffer.from(
-      JSON.stringify({ iss: "http://127.0.0.1:1/auth/v1", sub: "user-1" }),
+describe("Supabase session JWT", () => {
+  it("is refused: only node tokens are accepted", async () => {
+    const sessionLike = `${Buffer.from(JSON.stringify({ alg: "ES256", typ: "JWT" })).toString("base64url")}.${Buffer.from(
+      JSON.stringify({ iss: "http://127.0.0.1:1/auth/v1", sub: "user-1", role: "authenticated", aud: "authenticated" }),
     ).toString("base64url")}.sig`;
-    expect((await call(bogus)).status).toBe(401);
+    const res = await call(sessionLike);
+    expect(res.status).toBe(401);
   });
 
-  it("passes requireScope, since it carries no scope", async () => {
-    const res = await legacy.request("/instances/i-42/start", { method: "POST" });
-    expect(res.status).toBe(200);
+  it("requireScope refuses a request with no node token instead of letting it through", async () => {
+    const res = await noToken.request("/instances/i-42/start", { method: "POST" });
+    expect(res.status).toBe(401);
   });
 });
+

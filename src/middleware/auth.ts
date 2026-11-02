@@ -1,33 +1,18 @@
 import type { Context, Next } from "hono";
-import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { AppVariables } from "@/types";
 import { debug } from "@/utils/logger";
 import { isNodeToken, verifyNodeToken } from "@/services/auth/node-token";
 
-const supabaseUrl = process.env.SUPABASE_URL;
-
-if (!supabaseUrl) {
-  throw new Error("SUPABASE_URL must be set");
-}
-
-// Newer Supabase projects (including local dev via the CLI) sign session
-// JWTs asymmetrically (ES256) and publish the verification key over JWKS,
-// rather than the legacy shared HS256 secret. We support both: route on the
-// token's own `alg` header so older projects still on the legacy secret
-// keep working unchanged. jose's jwtVerify handles both HS256 and
-// RS256/ES256, so there's no need for a separate jsonwebtoken dependency.
-const jwks = createRemoteJWKSet(new URL("/auth/v1/.well-known/jwks.json", supabaseUrl));
-
-// Two credentials are accepted while the web apps switch over (SW-481):
+// The only credential this API accepts is a node token
+// (services/auth/node-token.ts): 60 seconds, bound to this node, one scope
+// and usually one instance, signed by the web apps for each call. Routes
+// check the scope with requireScope (middleware/scope.ts).
 //
-//   - a node token (services/auth/node-token.ts): 60 seconds, bound to this node,
-//     one scope and usually one instance. Routes check the scope with
-//     requireScope (middleware/scope.ts).
-//   - LEGACY: the caller's Supabase session JWT, verified below. It carries no
-//     scope, so requireScope lets it through. Remove this path once both web
-//     apps send node tokens everywhere; until then, nothing else changes for it.
+// The caller's Supabase session JWT used to be accepted too while the web
+// apps switched over (SW-481). It carried no scope and no instance, so it is
+// refused now like any other token.
 //
-// Either one only ever arrives in the Authorization header. WebSocket upgrades
+// The token only ever arrives in the Authorization header. WebSocket upgrades
 // (which can't set headers) authenticate with single-use ws-tickets instead --
 // see services/auth/ws-tickets.ts -- so there's deliberately no query-param token path.
 function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
@@ -38,11 +23,6 @@ function extractToken(c: Context<{ Variables: AppVariables }>): string | null {
   return null;
 }
 
-export async function verifyToken(token: string): Promise<{ sub?: string; iss?: string }> {
-  const { payload } = await jwtVerify(token, jwks);
-  return payload as { sub?: string; iss?: string };
-}
-
 export async function authMiddleware(c: Context<{ Variables: AppVariables }>, next: Next) {
   const token = extractToken(c);
   if (!token) {
@@ -50,37 +30,20 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
     return c.json({ error: "Missing authentication token" }, 401);
   }
 
-  if (isNodeToken(token)) {
-    try {
-      const claims = await verifyNodeToken(token);
-      debug("auth", `verified node token for sub=${claims.userId} scope=${claims.scope} on ${c.req.path}`);
-      c.set("userId", claims.userId);
-      c.set("nodeToken", claims);
-      c.set("nodeTokenRaw", token);
-    } catch (err) {
-      debug("auth", `node token rejected on ${c.req.path}`, err instanceof Error ? err.message : err);
-      return c.json({ error: "Invalid or expired token" }, 401);
-    }
-    await next();
-    return;
-  }
-
-  let userId: string;
-  try {
-    const payload = await verifyToken(token);
-    if (!payload.sub) {
-      debug("auth", `token missing sub on ${c.req.path}`, payload);
-      return c.json({ error: "Invalid token payload" }, 401);
-    }
-    debug("auth", `verified legacy session JWT for sub=${payload.sub} iss=${payload.iss} on ${c.req.path}`);
-    userId = payload.sub;
-  } catch (err) {
-    debug("auth", `jwt verify failed on ${c.req.path}`, err instanceof Error ? err.message : err);
+  if (!isNodeToken(token)) {
+    debug("auth", `not a node token on ${c.req.path}`);
     return c.json({ error: "Invalid or expired token" }, 401);
   }
 
-  c.set("userId", userId);
-  c.set("nodeToken", null);
-  c.set("nodeTokenRaw", null);
+  try {
+    const claims = await verifyNodeToken(token);
+    debug("auth", `verified node token for sub=${claims.userId} scope=${claims.scope} on ${c.req.path}`);
+    c.set("userId", claims.userId);
+    c.set("nodeToken", claims);
+    c.set("nodeTokenRaw", token);
+  } catch (err) {
+    debug("auth", `node token rejected on ${c.req.path}`, err instanceof Error ? err.message : err);
+    return c.json({ error: "Invalid or expired token" }, 401);
+  }
   await next();
 }

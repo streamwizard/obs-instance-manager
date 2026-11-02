@@ -33,6 +33,7 @@ mock.module("@/middleware/auth", () => ({
   authMiddleware: async (c: any, next: any) => {
     // Own user per test: the create route rate-limits 5 per user per minute.
     c.set("userId", `user-${testUser}`);
+    c.set("nodeToken", { userId: `user-${testUser}`, scope: "instances:create", instanceId: null, role: "user" });
     c.set("nodeTokenRaw", "node-token-for-user-1");
     await next();
   },

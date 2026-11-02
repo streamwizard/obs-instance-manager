@@ -8,12 +8,15 @@ import { debug } from "@/utils/logger";
 // must name that instance. A token for "start i-42" can't stop i-77, delete
 // i-42 or open its files.
 //
-// A legacy Supabase session JWT has no scope (nodeToken is null) and passes
-// unchanged; that goes away together with the legacy path in auth.ts.
+// No node token at all (a route mounted without authMiddleware, or a bug)
+// is refused rather than let through.
 export function requireScope(scope: NodeTokenScope) {
   return createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
     const token = c.get("nodeToken");
-    if (!token) return next();
+    if (!token) {
+      debug("auth", `no node token on ${c.req.method} ${c.req.path}`);
+      return c.json({ error: "Unauthorized" }, 401);
+    }
 
     if (token.scope !== scope) {
       debug("auth", `node token scope ${token.scope} not allowed on ${c.req.method} ${c.req.path}`);
