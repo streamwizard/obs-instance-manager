@@ -8,6 +8,7 @@ import { handleGpuXserverEvent, queueIfGpuCorrelated } from "@/services/docker/g
 import { withInstanceLock } from "@/utils/instance-lock";
 import { debug, log } from "@/utils/logger";
 import type { InstanceStatus } from "@/types";
+import { instanceIdFromContainerName } from "@/utils/container-name";
 
 const EVENT_RECONNECT_DELAY_MS = 5000;
 
@@ -73,12 +74,9 @@ async function handleObsSceneWatchEvent(rawLine: string): Promise<void> {
   const event = JSON.parse(rawLine);
   if (event.Action !== "start" && event.Action !== "die") return;
 
-  const containerName: string = (event.Actor?.Attributes?.name ?? "").replace(/^\//, "");
-  if (!containerName.startsWith("obs-instance-")) return;
-
-  // Container names are `obs-instance-${instanceId}` (see services/instances/create-instance.ts),
-  // so a detach needs no DB round trip.
-  const instanceId = containerName.slice("obs-instance-".length);
+  // Container names are `obs-instance-${instanceId}`, so a detach needs no DB
+  // round trip. Anything else (this manager's own container included) is ignored.
+  const instanceId = instanceIdFromContainerName(event.Actor?.Attributes?.name ?? "");
   if (!instanceId) return;
 
   if (event.Action === "die") {
@@ -100,8 +98,7 @@ async function handleContainerDieEvent(rawLine: string): Promise<void> {
   // only cares about "die".
   if (event.Action !== "die") return;
 
-  const containerName: string = (event.Actor?.Attributes?.name ?? "").replace(/^\//, "");
-  if (!containerName.startsWith("obs-instance-")) return;
+  if (!instanceIdFromContainerName(event.Actor?.Attributes?.name ?? "")) return;
 
   const containerId: string | undefined = event.Actor?.ID;
   if (!containerId) return;

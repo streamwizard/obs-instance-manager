@@ -2,6 +2,7 @@ import Docker from "dockerode";
 import { debug, log } from "@/utils/logger";
 import { buildContainerSpec, runtimeFromEnv } from "./instance-spec";
 import { parseCpuset, pickLeastUsedCores } from "@/utils/cpuset";
+import { isInstanceContainer } from "@/utils/container-name";
 
 // Thin Docker API layer: container create/start/stop/remove/inspect and the
 // obs-net addressing helpers. Orchestration on top of it (boot reconcile, the
@@ -102,10 +103,13 @@ async function allocateCpuset(cpuQuota: number): Promise<string | undefined> {
     // Nothing to constrain: the instance may already use every core.
     if (!Number.isInteger(total) || total < 1 || want >= total) return undefined;
 
-    const running = await docker.listContainers({
-      all: false,
-      filters: { name: ["obs-instance-"] },
-    });
+    // Instances only: the name filter also matches this manager's container.
+    const running = (
+      await docker.listContainers({
+        all: false,
+        filters: { name: ["obs-instance-"] },
+      })
+    ).filter(isInstanceContainer);
 
     const usage = new Array<number>(total).fill(0);
     for (const summary of running) {

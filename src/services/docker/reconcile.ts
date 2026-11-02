@@ -6,6 +6,7 @@ import { refreshNodeInstances } from "@/services/cache/instance-cache";
 import { restartInstance } from "@/services/instances/instance-lifecycle";
 import { trackInstanceEvent } from "@/services/metrics/influx-metrics";
 import { RESTART_STAGGER_MS } from "@/utils/constants";
+import { isInstanceContainer } from "@/utils/container-name";
 import { debug, log } from "@/utils/logger";
 
 // Boot-time reconciliation: cross-checks running OBS containers against
@@ -23,10 +24,14 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
     nodeInstances.map((i) => i.container_id).filter((id): id is string => !!id)
   );
 
-  const dockerContainers = await docker.listContainers({
-    all: true,
-    filters: { name: ["obs-instance-"] },
-  });
+  // The name filter is a substring match (it also hits this manager's own
+  // obs-instance-manager container), so keep only real instance names.
+  const dockerContainers = (
+    await docker.listContainers({
+      all: true,
+      filters: { name: ["obs-instance-"] },
+    })
+  ).filter(isInstanceContainer);
 
   const orphanedContainers: string[] = [];
 
