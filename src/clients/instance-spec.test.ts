@@ -6,7 +6,7 @@ const input: ContainerSpecInput = {
   containerName: "obs-instance-inst-1",
   resolution: "1920x1080",
   obsWsPassword: "ws-pw",
-  vncPassword: "vnc-pw",
+  viewerPassword: "viewer-pw",
   memory_mb: 4096,
   cpu_quota: 2,
   shmBytes: 2 * 1024 ** 3,
@@ -22,13 +22,26 @@ test("no env set: exactly the production container createContainer always built"
     Image: "ghcr.io/streamwizard/obs-cloud-container:latest",
     Env: [
       "RESOLUTION=1920x1080",
-      "VNC_PORT=5900",
-      "NOVNC_PORT=6080",
       "OBS_WEBSOCKET_PORT=4455",
       "OBS_WEBSOCKET_PASSWORD=ws-pw",
-      "VNC_PASSWORD=vnc-pw",
       "DISPLAY_NUM=:10",
-      "OBS_BROWSER_EXTRA_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu",
+      "SELKIES_ENCODER=h264enc-striped",
+      "SELKIES_FRAMERATE=60-60",
+      "SELKIES_VIDEO_STREAMING_MODE=false|locked",
+      "SELKIES_UI_SHOW_SIDEBAR=false",
+      "SELKIES_UI_SHOW_CORE_BUTTONS=false",
+      "SELKIES_ENABLE_SHARING=false",
+      "SELKIES_GAMEPAD_ENABLED=false",
+      "SELKIES_MICROPHONE_ENABLED=false",
+      "SELKIES_WEBCAM_ENABLED=false",
+      "SELKIES_FILE_TRANSFERS=",
+      "SELKIES_AUDIO_DEVICE_NAME=obs_sink.monitor",
+      "SELKIES_AUDIO_REDUNDANCY=true",
+      "SELKIES_MANUAL_RESOLUTION=true|locked",
+      "SELKIES_MANUAL_WIDTH=1920",
+      "SELKIES_MANUAL_HEIGHT=1080",
+      "SELKIES_PORT=8080",
+      "SELKIES_BASIC_AUTH_PASSWORD=viewer-pw",
     ],
     HostConfig: {
       Runtime: "nvidia",
@@ -48,27 +61,25 @@ test("no env set: exactly the production container createContainer always built"
       ],
       DeviceRequests: [{ Driver: "nvidia", Count: -1, Capabilities: [["gpu", "utility", "video", "display"]] }],
     },
-    ExposedPorts: { "5900/tcp": {}, "6080/tcp": {}, "4455/tcp": {} },
+    ExposedPorts: { "8080/tcp": {}, "4455/tcp": {} },
     NetworkingConfig: { EndpointsConfig: { "obs-net": {} } },
   });
 });
 
-test("selkies + direct GPU: no VNC, no gpu-xserver, no bwrap privileges, WSL libs mounted", () => {
+test("direct GPU: no gpu-xserver, no bwrap privileges, WSL libs mounted, node overrides", () => {
   const rt = runtimeFromEnv({
     OBS_INSTANCE_IMAGE: "obs-cloud-container-local:selkies",
-    OBS_VIEWER: "selkies",
     OBS_GPU_MODE: "direct",
     OBS_CONFIG_BASE: "/work/.local-data/obs-configs",
     PLUGINS_PATH: "/work/.local-data/obs-plugins",
-    SELKIES_VIDEO_CRF: "25",
-    SELKIES_ENABLE_BASIC_AUTH: "true",
+    SELKIES_VIDEO_BITRATE: "4000",
+    SELKIES_BASIC_AUTH_PASSWORD: "node-wide",
   });
   const spec = buildContainerSpec({ ...input, resolution: "1280x720" }, rt);
   const env = spec.Env ?? [];
   const host = spec.HostConfig ?? {};
 
   expect(spec.Image).toBe("obs-cloud-container-local:selkies");
-  expect(env.some((e) => e.startsWith("VNC_"))).toBe(false);
   expect(env).toContain("OBS_GL_MODE=d3d12");
   expect(env).toContain("SELKIES_MANUAL_WIDTH=1280");
   expect(env).toContain("SELKIES_MANUAL_HEIGHT=720");
@@ -79,13 +90,15 @@ test("selkies + direct GPU: no VNC, no gpu-xserver, no bwrap privileges, WSL lib
   // Locks in the syntax Selkies parses; "|locked" on a range or list is
   // rejected and replaced by the default.
   expect(env).toContain("SELKIES_ENCODER=h264enc-striped");
-  expect(env).toContain("SELKIES_FRAMERATE=30-30");
-  expect(env.filter((e) => /^SELKIES_(ENCODER|FRAMERATE|VIDEO_CRF)=.*\|locked/.test(e))).toEqual([]);
+  expect(env).toContain("SELKIES_FRAMERATE=60-60");
+  expect(env).toContain("SELKIES_VIDEO_STREAMING_MODE=false|locked");
+  expect(env.filter((e) => /^SELKIES_(ENCODER|FRAMERATE)=.*\|locked/.test(e))).toEqual([]);
   // Overrides win over the defaults...
-  expect(env).toContain("SELKIES_VIDEO_CRF=25");
-  // ...except basic auth, which the proxy replaces.
-  expect(env).toContain("SELKIES_ENABLE_BASIC_AUTH=false");
-  expect(env).not.toContain("SELKIES_ENABLE_BASIC_AUTH=true");
+  expect(env).toContain("SELKIES_VIDEO_BITRATE=4000");
+  // ...except the password, which is always the instance's own.
+  expect(env.filter((e) => e.startsWith("SELKIES_BASIC_AUTH_PASSWORD="))).toEqual([
+    "SELKIES_BASIC_AUTH_PASSWORD=viewer-pw",
+  ]);
 
   expect(host.Runtime).toBeUndefined();
   expect(host.CapAdd).toBeUndefined();
@@ -106,6 +119,5 @@ test("software GL in direct mode skips the WSL mount", () => {
 });
 
 test("a typo in a mode fails loudly instead of silently falling back", () => {
-  expect(() => runtimeFromEnv({ OBS_VIEWER: "selkie" })).toThrow(/OBS_VIEWER/);
   expect(() => runtimeFromEnv({ OBS_GPU_MODE: "wsl" })).toThrow(/OBS_GPU_MODE/);
 });

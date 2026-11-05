@@ -29,8 +29,12 @@ class StreamKeyNotGrantedError extends Error {
 }
 
 mock.module("@/middleware/auth", () => ({
+  // A node token for this exact start, as authMiddleware would set it.
   authMiddleware: async (c: any, next: any) => {
+    const instanceId = new URL(c.req.url).pathname.split("/")[2] ?? null;
     c.set("userId", "user-1");
+    c.set("nodeToken", { userId: "user-1", scope: "instances:control", instanceId, role: "user" });
+    c.set("nodeTokenRaw", "node-token");
     await next();
   },
 }));
@@ -86,13 +90,11 @@ mock.module("@/clients/docker", () => ({
   markApiStopping: () => {},
   clearApiStopping: () => {},
   stopContainer: async () => {},
-  NOVNC_PORT_INTERNAL: 6080,
-  OBS_WS_PORT_INTERNAL: 4455,
   SELKIES_PORT_INTERNAL: 8080,
-  instanceRuntime: { viewer: "novnc" },
+  OBS_WS_PORT_INTERNAL: 4455,
 }));
-mock.module("@/clients/ws-server", () => ({
-  broadcastLifecycle: (_u: string, _i: string, action: string) => {
+mock.module("@/clients/streamwizard-api/events", () => ({
+  broadcastLifecycle: (_i: string, action: string) => {
     calls.lifecycle.push(action);
   },
 }));

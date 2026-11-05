@@ -1,42 +1,45 @@
 import type { Context } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { upgradeWebSocket } from "hono/bun";
 import { instanceTarget, SELKIES_PORT_INTERNAL } from "@/clients/docker";
 import { consumeTicket, type Ticket } from "@/services/auth/ws-tickets";
-import {
-  SELKIES_COOKIE,
-  SELKIES_SESSION_TTL_MS,
-  sessionKeyFrom,
-  signSession,
-  verifySession,
-  type SelkiesSession,
-} from "@/services/auth/selkies-session";
+import { ViewerSessions, type ViewerSession } from "@/services/auth/selkies-viewer-sessions";
+import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
+import { containerNameForInstance } from "@/utils/container-name";
+import { isStaticPath, tokenFromBearer, tokenFromCookie, tokenFromProtocols } from "@/services/proxy/selkies-request";
 import { MessageRateLimiter } from "@/utils/rate-limit";
-import { upgradeWebSocket } from "hono/bun";
 import { debug, log } from "@/utils/logger";
 
 // Reverse proxy for the Selkies web viewer running inside an instance
 // container (port 8080 on obs-net). Mounted at /instances/:id/selkies/* and
-// /admin/instances/:id/selkies/*. The panel iframes the entry URL with a
-// ws-ticket (scope "selkies"); that is swapped for a signed session cookie
-// (services/auth/selkies-session.ts) that every asset request and the WebSocket
-// upgrade then present. The Selkies client builds every URL relative to its
-// own page path, so serving it under this prefix needs no rewriting.
+// /admin/instances/:id/selkies/*. The Selkies client builds every URL
+// relative to its own page path, so serving it under this prefix needs no
+// rewriting.
+//
+// Auth works like the old noVNC socket, minus the reconnect minting the panel
+// can't do from here (see services/auth/selkies-viewer-sessions.ts):
+// - The panel opens <prefix>/#token=<ticket>. The fragment never reaches a
+//   server, so the ticket stays out of URLs and logs.
+// - Static client files (HTML, JS, CSS, codecs) load without it. They are the
+//   stock Selkies client and hold nothing per user.
+// - Everything under /api/ needs the ticket: the client sends it as
+//   "Authorization: Bearer" on fetches (or its own "selkies_token" cookie
+//   where it can't set a header) and as the "selkies.token.<b64url>"
+//   WebSocket subprotocol. The first use spends the ticket and opens a viewer
+//   session; every WebSocket connect checks instance ownership again.
+//
+// Selkies itself keeps basic auth on, with the instance's own password
+// (rest-api's vnc_password): every instance shares obs-net, so without it one
+// container could reach another tenant's desktop. This proxy adds that
+// Authorization header upstream; the browser never sees the password.
 
 const CONNECT_TIMEOUT_MS = 10_000;
 
-// NODE_API_KEY is required at boot (clients/streamwizard-api/client.ts).
-const sessionKey = sessionKeyFrom(process.env.NODE_API_KEY ?? "");
-
-// "Lax" works when the panel and this API share a site (localhost:3001 and
-// localhost:3100 do). A panel on another site iframing the node's tunnel
-// hostname needs "None", which browsers only accept together with Secure.
-const SAME_SITE = (process.env.SELKIES_COOKIE_SAMESITE ?? "Lax") as "Lax" | "Strict" | "None";
-
 // Only what a browser needs to fetch static assets and the API. Above all no
-// Cookie or Authorization: the panel's Supabase cookies alone can exceed
-// Selkies' 8 KiB aiohttp header limit ("Got more than 8190 bytes"), and none
-// of our credentials belong inside the container. No Accept-Encoding either,
-// so the body comes back as-is and Content-Length/Encoding stay truthful.
+// Cookie or Authorization from the browser: site-wide cookies alone can exceed
+// Selkies' 8 KiB aiohttp header limit ("Got more than 8190 bytes"), and the
+// browser's Bearer token is ours, not Selkies'. The only Authorization
+// upstream is the instance's own basic auth. No Accept-Encoding either, so the
+// body comes back as-is and Content-Length/Encoding stay truthful.
 const FORWARD_REQUEST_HEADERS = [
   "accept",
   "accept-language",
@@ -54,7 +57,20 @@ const STARTING_PAGE = `<!doctype html><meta charset="utf-8"><meta http-equiv="re
 <title>Starting</title><body style="margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#fffa;font:14px system-ui">
 OBS is starting&hellip;</body>`;
 
+// Selkies' basic-auth user, fixed by the image's entrypoint.
+const SELKIES_USER = "app";
+
 type GetInstance = (id: string, ticket: Ticket) => Promise<{ container_name: string } | null>;
+
+interface UpgradeContext {
+  authorization: string;
+  session: ViewerSession;
+  sessions: ViewerSessions;
+}
+
+// The WebSocket handler below is set up synchronously, so what it needs is
+// looked up before the upgrade and handed over per request.
+const pendingUpgrades = new WeakMap<Request, UpgradeContext>();
 
 // "/instances/<id>/selkies/assets/x.js" -> { base: "/instances/<id>/selkies", rest: "/assets/x.js" }
 function splitPath(path: string, id: string): { base: string; rest: string } {
@@ -64,8 +80,9 @@ function splitPath(path: string, id: string): { base: string; rest: string } {
   return { base, rest: path.slice(base.length) };
 }
 
-function sessionFor(c: Context, id: string): SelkiesSession | null {
-  return verifySession(sessionKey, getCookie(c, SELKIES_COOKIE), id);
+async function upstreamAuthorization(instanceId: string): Promise<string> {
+  const { vnc_password } = await getInstanceSecrets(instanceId);
+  return `Basic ${Buffer.from(`${SELKIES_USER}:${vnc_password}`).toString("base64")}`;
 }
 
 function searchWithout(url: URL, param: string): string {
@@ -77,25 +94,30 @@ function searchWithout(url: URL, param: string): string {
 
 const websocketRelay = upgradeWebSocket((c) => {
   const id = c.req.param("id") as string;
-  const session = sessionFor(c, id);
+  const ctx = pendingUpgrades.get(c.req.raw);
   const url = new URL(c.req.url);
   const { rest } = splitPath(url.pathname, id);
-  // Mouse motion and keystrokes are high-frequency, like noVNC's RFB stream.
+  // Mouse motion and keystrokes are high-frequency.
   const limiter = new MessageRateLimiter(2000, 200);
 
   let upstream: WebSocket | null = null;
   let queued: (string | ArrayBufferLike)[] = [];
   let dropped = 0;
+  let counted = false;
 
   return {
     onOpen(_event, ws) {
-      if (!session) {
+      if (!ctx) {
         ws.close(4401, "Invalid session");
         return;
       }
-      const target = `ws://${instanceTarget(session.containerName, SELKIES_PORT_INTERNAL)}${rest}${url.search}`;
+      ctx.sessions.socketOpened(ctx.session);
+      counted = true;
+      // Never pass the client's subprotocols on: they carry its token.
+      const target = `ws://${instanceTarget(ctx.session.containerName, SELKIES_PORT_INTERNAL)}${rest}${searchWithout(url, "token")}`;
       debug("ws", `${id}:selkies client connected, dialing ${target}`);
-      upstream = new WebSocket(target);
+      // Bun's WebSocket client accepts extra upgrade headers.
+      upstream = new WebSocket(target, { headers: { Authorization: ctx.authorization } });
       upstream.binaryType = "arraybuffer";
 
       const timeout = setTimeout(() => ws.close(4408, "Upstream timeout"), CONNECT_TIMEOUT_MS);
@@ -128,20 +150,23 @@ const websocketRelay = upgradeWebSocket((c) => {
     },
     onClose() {
       debug("ws", `${id}:selkies client disconnected`);
+      if (ctx && counted) ctx.sessions.socketClosed(ctx.session);
       upstream?.close();
     },
   };
 });
 
-async function forwardHttp(c: Context, session: SelkiesSession, base: string, rest: string, search: string) {
+async function forwardHttp(c: Context, containerName: string, authorization: string, base: string, rest: string) {
   const headers = new Headers();
   for (const name of FORWARD_REQUEST_HEADERS) {
     const value = c.req.header(name);
     if (value) headers.set(name, value);
   }
+  headers.set("authorization", authorization);
   const method = c.req.method;
   const hasBody = method !== "GET" && method !== "HEAD";
-  const target = `http://${instanceTarget(session.containerName, SELKIES_PORT_INTERNAL)}${rest || "/"}${search}`;
+  const search = searchWithout(new URL(c.req.url), "token");
+  const target = `http://${instanceTarget(containerName, SELKIES_PORT_INTERNAL)}${rest}${search}`;
 
   let res: Response;
   try {
@@ -156,8 +181,8 @@ async function forwardHttp(c: Context, session: SelkiesSession, base: string, re
   } catch (err) {
     debug("http", `selkies upstream ${target} unreachable`, (err as Error).message);
     // The panel opens the viewer as soon as the instance row says running,
-    // which is before Selkies inside it listens. The page is what lands in
-    // the iframe, so keep retrying there instead of showing a raw 502.
+    // which is before Selkies inside it listens. Keep the page retrying
+    // (the refresh keeps the #token fragment) instead of showing a raw 502.
     if (rest === "/") return c.html(STARTING_PAGE, 503, { "Retry-After": "2" });
     return c.json({ error: "Viewer not reachable (instance starting or stopped?)" }, 502);
   }
@@ -171,46 +196,80 @@ async function forwardHttp(c: Context, session: SelkiesSession, base: string, re
 }
 
 export function selkiesProxy(getInstance: GetInstance) {
+  // One store per mount, so a user-route session never opens the admin route.
+  const sessions = new ViewerSessions();
+  // First uses of the same token in flight (the client may probe the API and
+  // open its socket at once); the ticket can only be spent once.
+  const starting = new Map<string, Promise<ViewerSession | null>>();
+
+  async function sessionFor(token: string, id: string, recheckOwner: boolean): Promise<ViewerSession | null> {
+    const existing = sessions.get(token, id);
+    if (existing) {
+      if (!recheckOwner) return existing;
+      const instance = await getInstance(id, existing.ticket);
+      if (!instance) {
+        sessions.end(token);
+        return null;
+      }
+      existing.containerName = instance.container_name;
+      return existing;
+    }
+
+    const inFlight = starting.get(token);
+    if (inFlight) return inFlight;
+    const start = (async () => {
+      const ticket = consumeTicket(token, "selkies", id);
+      if (!ticket) return null;
+      const instance = await getInstance(id, ticket);
+      return instance ? sessions.start(token, ticket, instance.container_name) : null;
+    })().finally(() => starting.delete(token));
+    starting.set(token, start);
+    return start;
+  }
+
   return async (c: Context, next: () => Promise<void>) => {
     const id = c.req.param("id") as string;
+    const ownContainer = containerNameForInstance(id);
+    if (!ownContainer) return c.text("Instance not found", 404);
+
     const url = new URL(c.req.url);
     const { base, rest } = splitPath(url.pathname, id);
-
-    // Entry: spend the ticket, set the session, and land on a clean URL. The
-    // trailing slash matters: the client resolves "api/websockets" and
-    // "./assets/..." against its own directory.
-    const ticketParam = url.searchParams.get("ticket");
-    if (ticketParam !== null) {
-      const ticket = consumeTicket(ticketParam, "selkies", id);
-      const instance = ticket ? await getInstance(id, ticket) : null;
-      if (!ticket || !instance) {
-        debug("http", `${id}:selkies entry rejected (${ticket ? "instance not found" : "invalid ticket"})`);
-        return c.text(ticket ? "Instance not found" : "Invalid or expired link, reopen the viewer", ticket ? 404 : 401);
-      }
-      const expiresAt = Date.now() + SELKIES_SESSION_TTL_MS;
-      setCookie(
-        c,
-        SELKIES_COOKIE,
-        signSession(sessionKey, { instanceId: id, userId: ticket.userId, containerName: instance.container_name, expiresAt }),
-        {
-          path: base,
-          httpOnly: true,
-          sameSite: SAME_SITE,
-          secure: SAME_SITE === "None" || url.protocol === "https:",
-          maxAge: Math.floor(SELKIES_SESSION_TTL_MS / 1000),
-        },
-      );
-      return c.redirect(`${base}/${searchWithout(url, "ticket")}`, 302);
-    }
-
+    // The trailing slash matters: the client resolves "api/websockets" and
+    // "./assets/..." against its own directory. Browsers keep the #token
+    // fragment across this redirect.
     if (rest === "") return c.redirect(`${base}/${url.search}`, 301);
 
-    const session = sessionFor(c, id);
-    if (!session) return c.text("Viewer session expired, reopen the viewer", 401);
+    const isUpgrade = c.req.header("upgrade")?.toLowerCase() === "websocket";
+    let containerName = ownContainer;
+    let session: ViewerSession | null = null;
 
-    if (c.req.header("upgrade")?.toLowerCase() === "websocket") {
+    if (isUpgrade || !isStaticPath(rest)) {
+      const token = isUpgrade
+        ? tokenFromProtocols(c.req.header("sec-websocket-protocol"))
+        : (tokenFromBearer(c.req.header("authorization")) ?? tokenFromCookie(c.req.header("cookie")));
+      session = token ? await sessionFor(token, id, isUpgrade) : null;
+      if (!session) {
+        debug("http", `${id}:selkies request rejected (${token ? "expired or not yours" : "no token"})`);
+        if (isUpgrade) return c.text("Viewer link expired, reopen the viewer", 401);
+        return c.json({ error: "Viewer link expired, reopen the viewer" }, 401);
+      }
+      containerName = session.containerName;
+    } else if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+      return c.text("Method not allowed", 405);
+    }
+
+    let authorization: string;
+    try {
+      authorization = await upstreamAuthorization(id);
+    } catch (err) {
+      log("warn", "selkies proxy could not load the instance's viewer password", { id, error: (err as Error).message });
+      return c.json({ error: "Viewer not reachable, try again" }, 502);
+    }
+
+    if (isUpgrade && session) {
+      pendingUpgrades.set(c.req.raw, { authorization, session, sessions });
       return websocketRelay(c, next);
     }
-    return forwardHttp(c, session, base, rest, url.search);
+    return forwardHttp(c, containerName, authorization, base, rest);
   };
 }

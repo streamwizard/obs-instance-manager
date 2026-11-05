@@ -2,6 +2,7 @@ import Docker from "dockerode";
 import { debug, log } from "@/utils/logger";
 import { buildContainerSpec, runtimeFromEnv } from "./instance-spec";
 import { parseCpuset, pickLeastUsedCores } from "@/utils/cpuset";
+import { isInstanceContainer } from "@/utils/container-name";
 
 // Thin Docker API layer: container create/start/stop/remove/inspect and the
 // obs-net addressing helpers. Orchestration on top of it (boot reconcile, the
@@ -29,7 +30,7 @@ export function isApiStopping(containerId: string): boolean {
   return apiStoppingContainers.has(containerId);
 }
 
-// Image, viewer (noVNC or Selkies) and GPU wiring for instance containers.
+// Image, Selkies and GPU wiring for instance containers.
 // All default to production; see instance-spec.ts for the dev-box values.
 export const instanceRuntime = runtimeFromEnv();
 
@@ -39,8 +40,6 @@ export const instanceRuntime = runtimeFromEnv();
 const NETWORK_NAME = process.env.OBS_NETWORK || "obs-net";
 
 export {
-  VNC_PORT_INTERNAL,
-  NOVNC_PORT_INTERNAL,
   OBS_WS_PORT_INTERNAL,
   SELKIES_PORT_INTERNAL,
 } from "./instance-spec";
@@ -81,7 +80,7 @@ export interface CreateContainerOptions {
   containerName: string;
   resolution: string;
   obsWsPassword: string;
-  vncPassword: string;
+  viewerPassword: string;
   memory_mb: number;
   cpu_quota: number;
   shm_size: string;
@@ -103,10 +102,13 @@ async function allocateCpuset(cpuQuota: number): Promise<string | undefined> {
     // Nothing to constrain: the instance may already use every core.
     if (!Number.isInteger(total) || total < 1 || want >= total) return undefined;
 
-    const running = await docker.listContainers({
-      all: false,
-      filters: { name: ["obs-instance-"] },
-    });
+    // Instances only: the name filter also matches this manager's container.
+    const running = (
+      await docker.listContainers({
+        all: false,
+        filters: { name: ["obs-instance-"] },
+      })
+    ).filter(isInstanceContainer);
 
     const usage = new Array<number>(total).fill(0);
     for (const summary of running) {
@@ -141,7 +143,7 @@ export async function createContainer(
         containerName: opts.containerName,
         resolution: opts.resolution,
         obsWsPassword: opts.obsWsPassword,
-        vncPassword: opts.vncPassword,
+        viewerPassword: opts.viewerPassword,
         memory_mb: opts.memory_mb,
         cpu_quota: opts.cpu_quota,
         shmBytes: parseShmSize(opts.shm_size),

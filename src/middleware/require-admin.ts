@@ -11,7 +11,7 @@ import type { AppVariables } from "@/types";
 export async function requireAdmin(c: Context<{ Variables: AppVariables }>, next: Next) {
   const userId = c.get("userId");
   const nodeToken = c.get("nodeToken");
-  if (nodeToken && nodeToken.role !== "admin") {
+  if (!nodeToken || nodeToken.role !== "admin") {
     debug("auth", `node token for ${userId} is not an admin token, rejecting ${c.req.path}`);
     return c.json({ error: "Forbidden" }, 403);
   }

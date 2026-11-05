@@ -96,7 +96,6 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "hostname": "gpu-box-1",
      "tailscale_authkey": "<single-use, tag:obs-node key, or null>",
      "rest_api_url": "https://api.example.com",
-     "supabase_url": "https://xxxx.supabase.co",
      "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
      "S3_BUCKET": "...", "S3_REGION": "..."
    }
@@ -134,7 +133,7 @@ belt-and-braces: Docker-published ports bypass ufw, so the bind addresses
 are the real control.
 
 The loopback binding is for a Cloudflare Tunnel running on the node
-(`cloudflared` origin `http://localhost:3000`): that is how browsers (noVNC,
+(`cloudflared` origin `http://localhost:3000`): that is how browsers (the Selkies viewer,
 obs-websocket) and the panel apps reach the node, and it has no dependency
 on Tailscale being up. The admin sets the tunnel hostname as the node's
 `api_url`. The Tailscale binding is for tailnet hosts — the alert worker,
@@ -165,23 +164,20 @@ Tailnet prerequisites (one-off, in the Tailscale admin console):
 
 ## Realtime admin metrics
 
-Every node exposes `GET /admin/metrics/stream` — a WebSocket, authenticated
-the same way as every end-user `/metrics/*` route: a Supabase JWT
-(`Authorization: Bearer <token>` or `?token=<token>`), checked in
-`src/routes/admin.ts`. The only difference from the end-user routes is the
-authorization check — instead of "does this JWT's user own this instance",
-it's "does this JWT's user have the `admin` role in `user_roles`" (a plain
-service-role query the node already has the credentials to run). `403` if
-the JWT is valid but the user isn't an admin. On connect it pushes a
+Every node exposes `GET /admin/metrics/stream` — a WebSocket. Like every
+other WebSocket on the node it authenticates with a 30-second single-use
+`?ticket=`, minted by `POST /admin/ws-ticket` (see `src/routes/admin.ts`).
+That mint route needs a node token with scope `admin:ws-ticket` and
+`role: "admin"`; `403` otherwise. On connect the stream pushes a
 `MetricsPayload` (same shape as `/metrics/snapshot`, but for **every**
 instance on the node, not scoped to one end user) immediately and then
 every 3 seconds for as long as the connection stays open.
 
-Because this is gated by the caller's own admin-scoped JWT rather than a
+Because the ticket comes from the admin's own node token rather than a
 separate node-wide secret, an admin's browser can open this websocket
-**directly** — `ws://{api_url}/admin/metrics/stream?token={supabase_jwt}` —
+**directly** — `ws://{api_url}/admin/metrics/stream?ticket={ticket}` —
 the same way an end user's browser connects directly to `/metrics/stream`,
-`/instances/:id/novnc`, and `/instances/:id/obsws`. No panel-side relay or
+`/instances/:id/selkies/`, and `/instances/:id/obsws`. No panel-side relay or
 node-wide credential is needed. `api_url` defaults to the node's tailnet
 address (`http://100.64.0.10:3000`, filled in at link time — see "Automated
 Tailscale join"), which only works from a machine on the tailnet. For
@@ -205,9 +201,9 @@ One concrete piece of that worth building early: a **deauthorize push**.
 Wings had a real vulnerability (CVE-2025-68954) where revoking a user's
 access didn't close their already-open sessions. The fix was a Panel→Wings
 `POST /api/deauthorize-user` call that force-closes that user's live
-connections immediately. We have the same exposure: a user's `/instances/:id/novnc`
-or `/instances/:id/obsws` websocket stays open until their Supabase JWT
-expires, even if their access is revoked in the meantime. The node-side fix
+connections immediately. We have the same exposure: a user's Selkies viewer or `/instances/:id/obsws`
+websocket stays open until it closes, even if their access is revoked in the
+meantime (ownership is only checked at each upgrade). The node-side fix
 is straightforward once there's a reason to add an authenticated
 node-control endpoint — track open proxy connections by `userId` in memory
 and expose a way to force-close them.
@@ -227,7 +223,7 @@ database.
 
 The per-instance VNC/noVNC/OBS-websocket port-range model is gone — instances
 are no longer published to the host at all, they're reached through
-obs-instance-manager's own websocket proxy (`/instances/:id/novnc`,
+obs-instance-manager's own proxy (`/instances/:id/selkies/`,
 `/instances/:id/obsws`) over a Docker-internal network. Run this migration
 (adjust name/timestamp to the repo's convention) against the existing
 `20260623000000_obs_instances.sql`:
@@ -272,8 +268,10 @@ alter table obs_instances
 headroom — and left `null` (unlimited) for Quadro/RTX-A nodes, which have no
 such cap. `vnc_password_*` mirrors the existing `obs_ws_password_*` columns'
 shape. rest-api generates and encrypts it when the node creates the row; the
-VNC password is purely an obs-net isolation measure (see entrypoint.sh's
-`x11vnc -rfbauth`) that the end user never needs to see.
+password is purely an obs-net isolation measure that the end user never
+needs to see. Despite the name it is now the Selkies viewer's basic-auth
+password: the manager passes it to the container and adds it as the
+Authorization header on its own proxy.
 
 The node never holds `TOKEN_ENCRYPTION_KEY` and never sees these encrypted
 columns. It sends the plaintext OBS WebSocket password on create and reads
@@ -283,5 +281,5 @@ both passwords back, in plaintext and only for its own instances, from
 Note: an earlier version of this doc also had this migration add an
 `admin_token` column, used to authenticate a panel-side relay for
 `/admin/metrics/stream`. That's gone now — see "Realtime admin metrics"
-above — the admin browser connects directly using its own Supabase JWT,
+above — the admin browser connects directly with a ws-ticket from its own node token,
 so no separate node-wide secret or relay is needed.

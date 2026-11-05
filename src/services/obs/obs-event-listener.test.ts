@@ -78,10 +78,10 @@ mock.module("@/clients/influx", () => ({
 }));
 
 // --- other collaborators ----------------------------------------------------
-const broadcasts: Array<{ userId: string; instanceId: string; sceneName: string; sceneUuid: string }> = [];
-mock.module("@/clients/ws-server", () => ({
-  broadcastSceneChanged: (userId: string, instanceId: string, sceneName: string, sceneUuid: string) => {
-    broadcasts.push({ userId, instanceId, sceneName, sceneUuid });
+const broadcasts: Array<{ instanceId: string; sceneName: string; sceneUuid: string }> = [];
+mock.module("@/clients/streamwizard-api/events", () => ({
+  broadcastSceneChanged: (instanceId: string, sceneName: string, sceneUuid: string) => {
+    broadcasts.push({ instanceId, sceneName, sceneUuid });
   },
   broadcastLifecycle: () => {},
 }));
@@ -169,7 +169,7 @@ test("attach connects to the instance container and seeds the current scene", as
   expect(FakeObs.instances.length).toBe(1);
   expect(FakeObs.instances[0]!.connectUrl).toBe("ws://obs-instance-inst-1:4455");
   expect(broadcasts).toEqual([
-    { userId: "user-1", instanceId: "inst-1", sceneName: "Live", sceneUuid: "uuid-live" },
+    { instanceId: "inst-1", sceneName: "Live", sceneUuid: "uuid-live" },
   ]);
 });
 

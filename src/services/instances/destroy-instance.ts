@@ -1,6 +1,5 @@
 import { clearApiStopping, markApiStopping, removeContainer, stopContainer } from "@/clients/docker";
 import { deleteInstance } from "@/clients/streamwizard-api/instances";
-import { broadcastLifecycle } from "@/clients/ws-server";
 import { removeLocalConfig, removeS3Config } from "@/services/storage/obs-config";
 import { withInstanceLock } from "@/utils/instance-lock";
 import { debug, log } from "@/utils/logger";
@@ -41,7 +40,7 @@ export async function destroyInstance(instance: Instance): Promise<void> {
       log("warn", "S3 config removal failed", { instanceId: id, error: (e as Error).message })
     );
 
+    // rest-api tells the owner it was deleted (the row is gone after this).
     await deleteInstance(id);
-    broadcastLifecycle(instance.user_id, id, "deleted");
   });
 }

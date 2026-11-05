@@ -11,20 +11,23 @@ import { randomBytes } from "node:crypto";
 // Single-use + a 30s TTL means a ticket leaked into a log is inert: it's
 // already consumed, or expired, before anyone could replay it.
 
-// "selkies" is spent once on the viewer's entry URL and swapped for a session
-// cookie (services/proxy/selkies-proxy.ts), since an iframe app makes many requests.
-export type TicketScope = "metrics" | "novnc" | "obsws" | "selkies";
+// "selkies" rides in the viewer page's URL fragment and is spent on its first
+// API or WebSocket request, which turns it into a viewer session
+// (services/auth/selkies-viewer-sessions.ts). It gets a longer TTL because the
+// page may sit on OIM's "OBS is starting" screen before that first request.
+export type TicketScope = "metrics" | "obsws" | "selkies";
 
 export interface Ticket {
   userId: string;
   scope: TicketScope;
   // null for node-wide scopes like "metrics"; the instance id for the
-  // per-instance novnc/obsws/selkies proxies.
+  // per-instance obsws/selkies proxies.
   instanceId: string | null;
   expiresAt: number;
 }
 
 const TICKET_TTL_MS = 30_000;
+export const SELKIES_TICKET_TTL_MS = 120_000;
 const SWEEP_INTERVAL_MS = 60_000;
 
 // Tickets are minted and consumed on the same node process, so an in-memory
@@ -41,7 +44,7 @@ export function issueTicket(input: {
     userId: input.userId,
     scope: input.scope,
     instanceId: input.instanceId ?? null,
-    expiresAt: Date.now() + TICKET_TTL_MS,
+    expiresAt: Date.now() + (input.scope === "selkies" ? SELKIES_TICKET_TTL_MS : TICKET_TTL_MS),
   });
   return token;
 }

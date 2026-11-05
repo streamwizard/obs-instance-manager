@@ -3,7 +3,7 @@
 import { countActiveInstances, deleteInstance, insertInstance, updateInstance } from "@/clients/streamwizard-api/instances";
 import { getSubscriptionLimits } from "@/clients/streamwizard-api/subscriptions";
 import { createContainer, removeContainer, startContainer } from "@/clients/docker";
-import { broadcastLifecycle } from "@/clients/ws-server";
+import { broadcastLifecycle } from "@/clients/streamwizard-api/events";
 import { refreshNode } from "@/services/cache/node-cache";
 import { pullObsConfig, injectStreamKey, injectObsWsPassword } from "@/services/storage/obs-config";
 import { syncPlugins } from "@/services/storage/plugins";
@@ -32,7 +32,7 @@ export interface CreateInstanceInput {
   template?: string;
   obsWsPassword: string;
   // The caller's instances:create node token, forwarded to rest-api so it can
-  // check the user asked for this instance (SW-473). null for a session JWT.
+  // check the user asked for this instance (SW-473).
   nodeToken: string | null;
 }
 
@@ -118,7 +118,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
 
   // Leading-edge signal for the fresh-launch flow (status "creating"): show
   // "Starting…" on every device while the container is provisioned.
-  broadcastLifecycle(userId, instanceId, "starting");
+  broadcastLifecycle(instanceId, "starting");
 
   let containerId: string | null = null;
   try {
@@ -137,9 +137,10 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
       ),
     ]);
 
-    // rest-api generated the VNC password when it stored the row; this node
-    // only ever gets it in plaintext, for its own instances.
-    const { vnc_password: vncPassword } = await getInstanceSecrets(instanceId);
+    // rest-api generated the viewer password (its vnc_password column) when
+    // it stored the row; this node only ever gets it in plaintext, for its
+    // own instances.
+    const { vnc_password: viewerPassword } = await getInstanceSecrets(instanceId);
 
     await injectObsWsPassword(instanceId, obsWsPassword);
 
@@ -150,7 +151,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
       containerName,
       resolution: planLimits.resolution,
       obsWsPassword,
-      vncPassword,
+      viewerPassword,
       memory_mb: planLimits.memory_mb,
       cpu_quota: planLimits.cpu_quota,
       shm_size: planLimits.shm_size,
@@ -162,12 +163,12 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
       status: "running",
     });
 
-    broadcastLifecycle(userId, instanceId, "started");
+    broadcastLifecycle(instanceId, "started");
     return updated;
   } catch (err) {
     log("error", "instance create failed", { instanceId, error: (err as Error).message });
     await updateInstance(instanceId, { status: "error" });
-    broadcastLifecycle(userId, instanceId, "error");
+    broadcastLifecycle(instanceId, "error");
     if (containerId) {
       await removeContainer(containerId).catch((e) =>
         debug("docker", `cleanup of orphaned container ${containerId} failed: ${(e as Error).message}`),

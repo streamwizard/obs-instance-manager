@@ -1,11 +1,12 @@
 import { docker, getContainerStatus } from "@/clients/docker";
 import { updateInstance } from "@/clients/streamwizard-api/instances";
 import { postReconcileReport, type ReconcileInstanceResult } from "@/clients/streamwizard-api/nodes";
-import { broadcastLifecycle } from "@/clients/ws-server";
+import { broadcastLifecycle } from "@/clients/streamwizard-api/events";
 import { refreshNodeInstances } from "@/services/cache/instance-cache";
 import { restartInstance } from "@/services/instances/instance-lifecycle";
 import { trackInstanceEvent } from "@/services/metrics/influx-metrics";
 import { RESTART_STAGGER_MS } from "@/utils/constants";
+import { isInstanceContainer } from "@/utils/container-name";
 import { debug, log } from "@/utils/logger";
 
 // Boot-time reconciliation: cross-checks running OBS containers against
@@ -23,10 +24,14 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
     nodeInstances.map((i) => i.container_id).filter((id): id is string => !!id)
   );
 
-  const dockerContainers = await docker.listContainers({
-    all: true,
-    filters: { name: ["obs-instance-"] },
-  });
+  // The name filter is a substring match (it also hits this manager's own
+  // obs-instance-manager container), so keep only real instance names.
+  const dockerContainers = (
+    await docker.listContainers({
+      all: true,
+      filters: { name: ["obs-instance-"] },
+    })
+  ).filter(isInstanceContainer);
 
   const orphanedContainers: string[] = [];
 
@@ -68,18 +73,18 @@ export async function reconcileContainers(nodeId: string): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, RESTART_STAGGER_MS));
     } else if (status === "not_found" && instance.status !== "error") {
       await updateInstance(instance.id, { status: "error" });
-      broadcastLifecycle(instance.user_id, instance.id, "error");
+      broadcastLifecycle(instance.id, "error");
       log("warn", "instance container missing, marked error", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_error" });
       trackInstanceEvent(nodeId, instance.id, instance.user_id, "crash", { reason: "reconcile" });
     } else if (status === "running" && instance.status !== "running") {
       await updateInstance(instance.id, { status: "running" });
-      broadcastLifecycle(instance.user_id, instance.id, "started");
+      broadcastLifecycle(instance.id, "started");
       log("info", "instance container running, resynced status", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_running" });
     } else if (status === "stopped" && instance.status === "running") {
       await updateInstance(instance.id, { status: "stopped" });
-      broadcastLifecycle(instance.user_id, instance.id, "stopped");
+      broadcastLifecycle(instance.id, "stopped");
       log("info", "instance container stopped, resynced status", { instanceId: instance.id });
       instanceResults.push({ instance_id: instance.id, action: "marked_stopped" });
     } else {

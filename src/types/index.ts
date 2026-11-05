@@ -119,11 +119,10 @@ export interface MetricsPayload {
 
 export interface AppVariables {
   userId: string;
-  // Set when the caller presented a node token. null for the legacy Supabase
-  // session JWT, which carries no scope -- see middleware/auth.ts.
-  nodeToken: NodeTokenClaims | null;
+  // The verified node token -- the only credential authMiddleware accepts.
+  nodeToken: NodeTokenClaims;
   // The node token itself, for the one route that forwards it (POST
-  // /instances, to rest-api). null whenever nodeToken is.
-  nodeTokenRaw: string | null;
+  // /instances, to rest-api).
+  nodeTokenRaw: string;
 }
 

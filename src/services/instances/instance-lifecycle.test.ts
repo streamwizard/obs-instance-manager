@@ -31,9 +31,9 @@ const calls = {
 
 mock.module("@/clients/docker", () => ({
   findContainerByName: async () => (probeQueue.length ? probeQueue.shift()! : existing),
-  createContainer: async (opts: { obsWsPassword?: string; vncPassword?: string }) => {
+  createContainer: async (opts: { obsWsPassword?: string; viewerPassword?: string }) => {
     calls.createContainer++;
-    containerPasswords.push({ obsWsPassword: opts.obsWsPassword, vncPassword: opts.vncPassword });
+    containerPasswords.push({ obsWsPassword: opts.obsWsPassword, viewerPassword: opts.viewerPassword });
     if (createError) throw createError;
     return "new-container";
   },
@@ -53,15 +53,15 @@ mock.module("@/clients/streamwizard-api/instances", () => ({
     return { ...instance, ...patch };
   },
 }));
-mock.module("@/clients/ws-server", () => ({
-  broadcastLifecycle: (_u: string, _i: string, action: string) => {
+mock.module("@/clients/streamwizard-api/events", () => ({
+  broadcastLifecycle: (_i: string, action: string) => {
     calls.lifecycle.push(action);
   },
 }));
 // rest-api decrypts the passwords; the node only reads them back.
 let secrets: { obs_ws_password: string | null; vnc_password: string } = { obs_ws_password: "obs-pw", vnc_password: "vnc-pw" };
 let secretsError: Error | null = null;
-const containerPasswords: { obsWsPassword?: string; vncPassword?: string }[] = [];
+const containerPasswords: { obsWsPassword?: string; viewerPassword?: string }[] = [];
 mock.module("@/services/cache/instance-secrets-cache", () => ({
   getInstanceSecrets: async () => {
     if (secretsError) throw secretsError;
@@ -200,7 +200,7 @@ test("stream key refused: rethrows before any broadcast, config write or status 
 
 test("passes the passwords from rest-api into the container", async () => {
   await restartInstance(instance);
-  expect(containerPasswords).toEqual([{ obsWsPassword: "obs-pw", vncPassword: "vnc-pw" }]);
+  expect(containerPasswords).toEqual([{ obsWsPassword: "obs-pw", viewerPassword: "vnc-pw" }]);
 });
 
 test("secrets call fails: refuses the start before any broadcast or side effect", async () => {

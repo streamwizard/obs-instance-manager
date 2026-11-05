@@ -819,7 +819,6 @@ with open(env_path, "w") as f:
     f.write(f"NODE_ID={data['node_id']}\n")
     f.write(f"NODE_API_KEY={data['node_api_key']}\n")
     f.write(f"REST_API_URL={data['rest_api_url']}\n")
-    f.write(f"SUPABASE_URL={data['supabase_url']}\n")
     # Prefer whatever the panel echoes back (the value now stored in the
     # database), falling back to what we just computed and submitted above
     # in case the claim response doesn't happen to include it.
@@ -851,11 +850,6 @@ with open(env_path, "w") as f:
     f.write(f"INFLUXDB_URL={data.get('INFLUXDB_URL') or ''}\n")
     f.write(f"INFLUXDB_TOKEN={data.get('INFLUXDB_TOKEN') or ''}\n")
     f.write(f"INFLUXDB_ORG={data.get('INFLUXDB_ORG') or ''}\n")
-    # rest-api only includes these when both are configured -- fall back to
-    # blank so the node still installs, it just won't push lifecycle events to
-    # browsers (src/clients/ws-server.ts skips the broadcast when unset).
-    f.write(f"WS_SERVER_URL={data.get('WS_SERVER_URL') or ''}\n")
-    f.write(f"CONSUMER_SECRET={data.get('CONSUMER_SECRET') or ''}\n")
     # Blank by default -- docker-compose.yml falls back to :latest. Set this to
     # pin the node to a specific build (e.g. sha-abc1234) without editing
     # docker-compose.yml.
@@ -891,7 +885,7 @@ else
     if [ -n "$TAILSCALE_IP" ]; then
       sed -i "s/^TAILSCALE_IP=.*/TAILSCALE_IP=$TAILSCALE_IP/" "$ENV_FILE"
     fi
-    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example -- fill in NODE_ID, NODE_API_KEY, REST_API_URL, SUPABASE_URL (and TAILSCALE_IP if Tailscale wasn't up yet) by hand before starting."
+    warn "No --rest-api-url/--token given. Scaffolded $ENV_FILE from .env.example -- fill in NODE_ID, NODE_API_KEY, REST_API_URL (and TAILSCALE_IP if Tailscale wasn't up yet) by hand before starting."
   else
     log "$ENV_FILE already exists, leaving it as-is."
   fi
@@ -920,7 +914,7 @@ step "Start"
 # host would stop the traffic. Refusing to start is the only safe answer
 # until the node has actually joined Tailscale.
 MISSING_KEYS=""
-for key in NODE_ID NODE_API_KEY REST_API_URL SUPABASE_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TAILSCALE_IP; do
+for key in NODE_ID NODE_API_KEY REST_API_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TAILSCALE_IP; do
   grep -q "^${key}=.\+" "$ENV_FILE" || MISSING_KEYS="$MISSING_KEYS $key"
 done
 

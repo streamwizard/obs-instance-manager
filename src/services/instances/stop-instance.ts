@@ -1,6 +1,6 @@
 import { clearApiStopping, markApiStopping, removeContainer, stopContainer } from "@/clients/docker";
 import { updateInstance } from "@/clients/streamwizard-api/instances";
-import { broadcastLifecycle } from "@/clients/ws-server";
+import { broadcastLifecycle } from "@/clients/streamwizard-api/events";
 import { clearStreamKey, persistAndRemoveLocalConfig } from "@/services/storage/obs-config";
 import { withInstanceLock } from "@/utils/instance-lock";
 import { debug, log } from "@/utils/logger";
@@ -20,7 +20,7 @@ export async function stopInstance(instance: Instance): Promise<Instance> {
     markApiStopping(containerId);
     // Leading-edge signal: this stop is deliberate. Lets other devices show
     // "Stopping…" instead of reading the imminent socket drop as a blip.
-    broadcastLifecycle(instance.user_id, id, "stopping");
+    broadcastLifecycle(id, "stopping");
     try {
       await stopContainer(containerId);
 
@@ -35,7 +35,7 @@ export async function stopInstance(instance: Instance): Promise<Instance> {
       );
 
       const result = await updateInstance(id, { container_id: null, status: "stopped" });
-      broadcastLifecycle(instance.user_id, id, "stopped");
+      broadcastLifecycle(id, "stopped");
       return result;
     } finally {
       clearApiStopping(containerId);
