@@ -1,21 +1,22 @@
-import { test, expect, mock } from "bun:test";
+import { test, expect } from "bun:test";
+import { mintInstanceTicket } from "./instance-ticket";
+import { consumeTicket } from "./ws-tickets";
 
-// The noVNC password on a ticket comes from rest-api (the node can't decrypt).
-mock.module("@/services/cache/instance-secrets-cache", () => ({
-  getInstanceSecrets: async () => ({ obs_ws_password: "obs-pw", vnc_password: "vnc-from-rest-api" }),
-}));
-
-const { mintInstanceTicket } = await import("./instance-ticket");
-
+// Ticket minting for the per-instance proxies. No password rides along: the
+// Selkies proxy adds the instance's basic auth upstream itself.
 const instance = { id: "inst-1" } as never;
 
-test("a novnc ticket carries the VNC password from rest-api", async () => {
-  const res = await mintInstanceTicket("user-1", instance, "novnc");
-  expect(res.vnc_password).toBe("vnc-from-rest-api");
-  expect(typeof res.ticket).toBe("string");
+test("a selkies ticket is bound to its scope and instance, and carries no password", () => {
+  const res = mintInstanceTicket("user-1", instance, "selkies");
+  expect(Object.keys(res).sort()).toEqual(["expires_in", "ticket"]);
+  // Longer than other tickets: the viewer page may wait on "OBS is starting".
+  expect(res.expires_in).toBe(120);
+  expect(mintInstanceTicket("user-1", instance, "obsws").expires_in).toBe(30);
+  expect(consumeTicket(res.ticket, "obsws", "inst-1")).toBeNull();
 });
 
-test("an obsws ticket carries no password", async () => {
-  const res = await mintInstanceTicket("user-1", instance, "obsws");
-  expect(res.vnc_password).toBeUndefined();
+test("a ticket is spent once", () => {
+  const { ticket } = mintInstanceTicket("user-1", instance, "selkies");
+  expect(consumeTicket(ticket, "selkies", "inst-1")?.userId).toBe("user-1");
+  expect(consumeTicket(ticket, "selkies", "inst-1")).toBeNull();
 });

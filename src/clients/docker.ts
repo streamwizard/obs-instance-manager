@@ -30,9 +30,9 @@ export function isApiStopping(containerId: string): boolean {
   return apiStoppingContainers.has(containerId);
 }
 
-// Image and GPU wiring for instance containers.
+// Image, Selkies and GPU wiring for instance containers.
 // All default to production; see instance-spec.ts for the dev-box values.
-const instanceRuntime = runtimeFromEnv();
+export const instanceRuntime = runtimeFromEnv();
 
 // Shared user-defined network joined by both the api container and every
 // instance container, so the api can reach instances by container name over
@@ -40,9 +40,8 @@ const instanceRuntime = runtimeFromEnv();
 const NETWORK_NAME = process.env.OBS_NETWORK || "obs-net";
 
 export {
-  VNC_PORT_INTERNAL,
-  NOVNC_PORT_INTERNAL,
   OBS_WS_PORT_INTERNAL,
+  SELKIES_PORT_INTERNAL,
 } from "./instance-spec";
 
 export { docker };
@@ -81,7 +80,7 @@ export interface CreateContainerOptions {
   containerName: string;
   resolution: string;
   obsWsPassword: string;
-  vncPassword: string;
+  viewerPassword: string;
   memory_mb: number;
   cpu_quota: number;
   shm_size: string;
@@ -144,7 +143,7 @@ export async function createContainer(
         containerName: opts.containerName,
         resolution: opts.resolution,
         obsWsPassword: opts.obsWsPassword,
-        vncPassword: opts.vncPassword,
+        viewerPassword: opts.viewerPassword,
         memory_mb: opts.memory_mb,
         cpu_quota: opts.cpu_quota,
         shmBytes: parseShmSize(opts.shm_size),

@@ -1,11 +1,10 @@
 import type { ContainerCreateOptions } from "dockerode";
 
-// What an instance container looks like on this node. Production is noVNC +
-// the shared gpu-xserver (VirtualGL); the other values exist for running the
-// whole stack on a dev box, e.g. WSL2 + Docker Desktop, where there is no
-// NVIDIA DRM driver for a real Xorg. The viewer is always noVNC. Everything
-// defaults to production, so a node with none of these env vars set creates
-// exactly the containers it always has.
+// What an instance container looks like on this node. Production renders
+// through the shared gpu-xserver (VirtualGL); the other values exist for
+// running the whole stack on a dev box, e.g. WSL2 + Docker Desktop, where
+// there is no NVIDIA DRM driver for a real Xorg. Everything defaults to
+// production. The viewer is always Selkies (services/proxy/selkies-proxy.ts).
 
 // xserver: render through VirtualGL on the node's shared gpu-xserver
 //   (docker-compose.yml), OBS jailed in bwrap. Production.
@@ -23,13 +22,15 @@ export interface InstanceRuntime {
   wslLibDir: string;
   configBase: string;
   pluginsDir: string;
+  // SELKIES_* vars from the manager's own env, forwarded to Selkies
+  // containers as overrides of the defaults below.
+  selkiesOverrides: Record<string, string>;
 }
 
 export const DEFAULT_IMAGE = "ghcr.io/streamwizard/obs-cloud-container:latest";
 
-export const VNC_PORT_INTERNAL = 5900;
-export const NOVNC_PORT_INTERNAL = 6080;
 export const OBS_WS_PORT_INTERNAL = 4455;
+export const SELKIES_PORT_INTERNAL = 8080;
 
 // Named volume backing the shared gpu-xserver's X11 socket directory --
 // gpu-xserver itself is a plain static service in this repo's own
@@ -46,6 +47,13 @@ function oneOf<T extends string>(name: string, value: string | undefined, allowe
 }
 
 export function runtimeFromEnv(env: Record<string, string | undefined> = process.env): InstanceRuntime {
+  const selkiesOverrides: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    // The password is per instance, never node-wide.
+    if (key.startsWith("SELKIES_") && key !== "SELKIES_BASIC_AUTH_PASSWORD" && value !== undefined) {
+      selkiesOverrides[key] = value;
+    }
+  }
   return {
     image: env.OBS_INSTANCE_IMAGE || DEFAULT_IMAGE,
     gpuMode: oneOf("OBS_GPU_MODE", env.OBS_GPU_MODE, ["xserver", "direct"], "xserver"),
@@ -53,6 +61,7 @@ export function runtimeFromEnv(env: Record<string, string | undefined> = process
     wslLibDir: env.OBS_WSL_LIB_DIR || "/usr/lib/wsl",
     configBase: env.OBS_CONFIG_BASE || "/data/obs-configs",
     pluginsDir: env.PLUGINS_PATH || "/data/obs-plugins",
+    selkiesOverrides,
   };
 }
 
@@ -61,7 +70,10 @@ export interface ContainerSpecInput {
   containerName: string;
   resolution: string;
   obsWsPassword: string;
-  vncPassword: string;
+  // Selkies basic-auth password. rest-api stores it per instance (still
+  // named vnc_password there); the proxy adds it as the Authorization
+  // header, so it never reaches the browser.
+  viewerPassword: string;
   memory_mb: number;
   cpu_quota: number;
   shmBytes: number;
@@ -69,27 +81,72 @@ export interface ContainerSpecInput {
   cpusetCpus?: string;
 }
 
+function selkiesEnv(resolution: string, overrides: Record<string, string>): string[] {
+  const [width, height] = resolution.split("x");
+  // Same settings the SW-202 evaluation settled on (obs-cloud-selkies'
+  // docker-compose.yml). Basic auth stays on (the image enforces it): every
+  // instance shares obs-net, so without it one container could reach
+  // another tenant's desktop directly.
+  //
+  // The viewer is a fixed product, not a remote-desktop toolbox: no sidebar
+  // or buttons, and the stream settings are locked so a value a
+  // browser remembered from an earlier session can't override them either.
+  // Selkies' lock syntax differs by type: one list item locks an enum, a
+  // degenerate "a-a" range locks a number, "|locked" is for booleans only.
+  // Anything else is logged as unparseable and silently replaced by the
+  // built-in default.
+  // No sharing links, gamepads, microphone, webcam or file transfer; the
+  // clipboard stays, OBS users paste stream titles and URLs.
+  //
+  // Encoder settings come from the SW-202 benchmark: striped H.264 at 60 fps
+  // used the least CPU and bandwidth of the video encoders, and 60 fps cost
+  // little more than 30. Turbo mode (encode every frame, even unchanged ones)
+  // only added CPU, so it is locked off. Selkies runs constant bitrate by
+  // default, which ignores SELKIES_VIDEO_CRF; cap bandwidth with
+  // SELKIES_VIDEO_BITRATE instead.
+  const vars: Record<string, string> = {
+    SELKIES_ENCODER: "h264enc-striped",
+    SELKIES_FRAMERATE: "60-60",
+    SELKIES_VIDEO_STREAMING_MODE: "false|locked",
+    SELKIES_UI_SHOW_SIDEBAR: "false",
+    SELKIES_UI_SHOW_CORE_BUTTONS: "false",
+    SELKIES_ENABLE_SHARING: "false",
+    SELKIES_GAMEPAD_ENABLED: "false",
+    SELKIES_MICROPHONE_ENABLED: "false",
+    SELKIES_WEBCAM_ENABLED: "false",
+    SELKIES_FILE_TRANSFERS: "",
+    SELKIES_AUDIO_DEVICE_NAME: "obs_sink.monitor",
+    SELKIES_AUDIO_REDUNDANCY: "true",
+    // Xvfb cannot add RANDR modes, so the client must not resize the desktop.
+    SELKIES_MANUAL_RESOLUTION: "true|locked",
+    SELKIES_MANUAL_WIDTH: width ?? "1920",
+    SELKIES_MANUAL_HEIGHT: height ?? "1080",
+    ...overrides,
+    SELKIES_PORT: String(SELKIES_PORT_INTERNAL),
+  };
+  return Object.entries(vars).map(([k, v]) => `${k}=${v}`);
+}
+
 export function buildContainerSpec(input: ContainerSpecInput, rt: InstanceRuntime): ContainerCreateOptions {
-  const { instanceId, containerName, resolution, obsWsPassword, vncPassword, memory_mb, cpu_quota } = input;
+  const { instanceId, containerName, resolution, obsWsPassword, viewerPassword, memory_mb, cpu_quota } = input;
   const memoryBytes = memory_mb * 1024 * 1024;
   const xserver = rt.gpuMode === "xserver";
   const d3d12 = !xserver && rt.glMode === "d3d12";
 
   const env = [
     `RESOLUTION=${resolution}`,
-    `VNC_PORT=${VNC_PORT_INTERNAL}`,
-    `NOVNC_PORT=${NOVNC_PORT_INTERNAL}`,
     `OBS_WEBSOCKET_PORT=${OBS_WS_PORT_INTERNAL}`,
     `OBS_WEBSOCKET_PASSWORD=${obsWsPassword}`,
-    `VNC_PASSWORD=${vncPassword}`,
     // :10, not :0 -- :0 is reserved for the shared gpu-xserver's real
     // Xorg (see docker-compose.yml); each instance's own Xvfb lives here.
     `DISPLAY_NUM=:10`,
-    `OBS_BROWSER_EXTRA_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu`,
     ...(xserver ? [] : [`OBS_GL_MODE=${rt.glMode}`, `NVIDIA_DRIVER_CAPABILITIES=all`]),
+    ...selkiesEnv(resolution, rt.selkiesOverrides),
+    // After the overrides, so a node's own SELKIES_* env can't replace it.
+    `SELKIES_BASIC_AUTH_PASSWORD=${viewerPassword}`,
   ];
 
-  const exposedPorts = [VNC_PORT_INTERNAL, NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL];
+  const exposedPorts = [SELKIES_PORT_INTERNAL, OBS_WS_PORT_INTERNAL];
 
   return {
     name: containerName,

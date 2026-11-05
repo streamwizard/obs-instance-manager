@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { getInstanceByIdAdmin } from "@/clients/streamwizard-api/instances";
-import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
+import { isAdmin } from "@/clients/streamwizard-api/users";
+import { OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { authMiddleware } from "@/middleware/auth";
 import { requireAdmin } from "@/middleware/require-admin";
 import { requireScope } from "@/middleware/scope";
@@ -8,6 +9,7 @@ import { rateLimitByUser } from "@/middleware/rate-limit";
 import { instanceWsTicketSchema, metricsWsTicketSchema } from "@/schemas/ws-ticket";
 import { issueTicket } from "@/services/auth/ws-tickets";
 import { mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { selkiesProxy } from "@/services/proxy/selkies-proxy";
 import { metricsStreamHandler } from "@/services/metrics/metrics-stream";
 import { proxyRoute } from "@/services/proxy/ws-proxy";
 import { restartInstance } from "@/services/instances/instance-lifecycle";
@@ -24,15 +26,19 @@ const admin = new Hono<{ Variables: AppVariables }>();
 const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
 const wsTicketRateLimit = rateLimitByUser(wsTicketLimiter, "Too many ticket requests, try again later");
 
-// WS upgrades (metrics/novnc/obsws) authenticate via single-use ws-tickets
+// WS upgrades (metrics/obsws) and the Selkies viewer authenticate via single-use ws-tickets
 // consumed in their handlers, NOT the JWT middleware below -- browsers can't
 // send an Authorization header on a WS upgrade. Registered before admin.use()
 // so the upgrade handler runs first and the JWT/admin check is skipped for
 // them, while every REST route still goes through it. The admin role was
 // already enforced at mint time (POST /admin/.../ws-ticket).
 admin.get("/metrics/stream", metricsStreamHandler);
-admin.get("/instances/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 200, "novnc", (id) => getInstanceByIdAdmin(id)));
 admin.get("/instances/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id) => getInstanceByIdAdmin(id)));
+// The viewer re-checks on every WebSocket connect: the ticket's user must
+// still be an admin, so a removed admin loses access at the next reconnect.
+const adminSelkies = selkiesProxy(async (id, ticket) => ((await isAdmin(ticket.userId)) ? getInstanceByIdAdmin(id) : null));
+admin.all("/instances/:id/selkies", adminSelkies);
+admin.all("/instances/:id/selkies/*", adminSelkies);
 
 admin.use("*", authMiddleware, requireAdmin);
 
@@ -63,7 +69,7 @@ admin.post("/instances/:id/ws-ticket", requireScope("admin:ws-ticket"), wsTicket
   const instance = await getInstanceByIdAdmin(id);
   if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-  return c.json(await mintInstanceTicket(userId, instance, parsed.data.scope));
+  return c.json(mintInstanceTicket(userId, instance, parsed.data.scope));
 });
 
 // Admin-scoped start/stop/delete -- same flows as the end-user

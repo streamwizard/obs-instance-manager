@@ -9,7 +9,7 @@ import { debug, log } from "@/utils/logger";
 const CONNECT_TIMEOUT_MS = 10_000;
 
 // Bridges a browser websocket connection to an instance container's internal
-// noVNC/obs-websocket port over the shared `obs-net` Docker network. Instance
+// obs-websocket port over the shared `obs-net` Docker network. Instance
 // containers publish no host ports, so this proxy is the only path in.
 //
 // Authenticates via a single-use ws-ticket on the URL (?ticket=...), not the
@@ -17,9 +17,9 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // upgrade, so routes using this must be registered before that middleware.
 //
 // messagesPerWindow/windowMs bound how fast one client can push input into a
-// container (mirrors Wings' WS throttle). noVNC gets a much higher ceiling
-// than obsws since mouse/keyboard streams are naturally high-frequency,
-// unlike sparse OBS control commands.
+// container (mirrors Wings' WS throttle). OBS control commands are sparse, so
+// the ceiling is low; the Selkies viewer has its own proxy and limit
+// (selkies-proxy.ts).
 //
 // getInstance is pluggable so the admin routes can reuse this proxy with an
 // ownership-free lookup (getInstanceByIdAdmin) instead of the end-user one. The

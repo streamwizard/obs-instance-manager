@@ -12,6 +12,13 @@ export function instanceIdFromContainerName(name: string): string | null {
   return INSTANCE_CONTAINER_NAME.exec(name)?.[1] ?? null;
 }
 
+/** The container name for an instance id, or null when the id is not a UUID
+ *  (so a request path can never steer the name). */
+export function containerNameForInstance(instanceId: string): string | null {
+  const name = `obs-instance-${instanceId}`;
+  return instanceIdFromContainerName(name) === null ? null : name;
+}
+
 /** For docker.listContainers() results, whose Names carry a leading "/". */
 export function isInstanceContainer(container: { Names?: string[] }): boolean {
   return (container.Names ?? []).some((n) => instanceIdFromContainerName(n) !== null);

@@ -137,9 +137,10 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
       ),
     ]);
 
-    // rest-api generated the VNC password when it stored the row; this node
-    // only ever gets it in plaintext, for its own instances.
-    const { vnc_password: vncPassword } = await getInstanceSecrets(instanceId);
+    // rest-api generated the viewer password (its vnc_password column) when
+    // it stored the row; this node only ever gets it in plaintext, for its
+    // own instances.
+    const { vnc_password: viewerPassword } = await getInstanceSecrets(instanceId);
 
     await injectObsWsPassword(instanceId, obsWsPassword);
 
@@ -150,7 +151,7 @@ export async function createInstance(userId: string, input: CreateInstanceInput)
       containerName,
       resolution: planLimits.resolution,
       obsWsPassword,
-      vncPassword,
+      viewerPassword,
       memory_mb: planLimits.memory_mb,
       cpu_quota: planLimits.cpu_quota,
       shm_size: planLimits.shm_size,

@@ -4,11 +4,12 @@ import { requireScope } from "@/middleware/scope";
 import { rateLimitByUser } from "@/middleware/rate-limit";
 import { getInstanceById, listUserInstances } from "@/clients/streamwizard-api/instances";
 import { canInteractCloudObs } from "@/clients/streamwizard-api/users";
-import { NOVNC_PORT_INTERNAL, OBS_WS_PORT_INTERNAL } from "@/clients/docker";
+import { OBS_WS_PORT_INTERNAL } from "@/clients/docker";
 import { createInstanceSchema } from "@/schemas/instance";
 import { instanceWsTicketSchema } from "@/schemas/ws-ticket";
 import { proxyRoute } from "@/services/proxy/ws-proxy";
 import { mintInstanceTicket } from "@/services/auth/instance-ticket";
+import { selkiesProxy } from "@/services/proxy/selkies-proxy";
 import { createInstance, CreateInstanceError, InstanceProvisionError } from "@/services/instances/create-instance";
 import { stopInstance } from "@/services/instances/stop-instance";
 import { destroyInstance } from "@/services/instances/destroy-instance";
@@ -36,14 +37,17 @@ const wsTicketLimiter = new KeyedRateLimiter(30, 60_000);
 // Authorization header on a WS upgrade, so these are registered before the
 // middleware: the upgrade handler runs first and never calls next(), so the
 // JWT check is skipped for them while every REST route still goes through it.
-instances.get("/:id/novnc", proxyRoute(NOVNC_PORT_INTERNAL, 2000, "novnc", (id, ticket) => getInstanceById(id, ticket.userId)));
 instances.get("/:id/obsws", proxyRoute(OBS_WS_PORT_INTERNAL, 10, "obsws", (id, ticket) => getInstanceById(id, ticket.userId)));
+// Selkies viewer (HTTP + WS), gated by the #token ticket and its viewer session.
+const userSelkies = selkiesProxy((id, ticket) => getInstanceById(id, ticket.userId));
+instances.all("/:id/selkies", userSelkies);
+instances.all("/:id/selkies/*", userSelkies);
 
 instances.use("*", authMiddleware);
 
 // Mints a short-lived, single-use ticket that the browser then puts on the WS
 // URL (?ticket=...). Ownership is enforced here while the real credential (a
-// node token) is still in the Authorization header,
+// node token, or the legacy session JWT) is still in the Authorization header,
 // so it never rides on the socket.
 instances.post(
   "/:id/ws-ticket",
@@ -61,7 +65,7 @@ instances.post(
     const instance = await getInstanceById(id, userId);
     if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-    return c.json(await mintInstanceTicket(userId, instance, parsed.data.scope));
+    return c.json(mintInstanceTicket(userId, instance, parsed.data.scope));
   },
 );
 

@@ -17,7 +17,7 @@ const calls = {
   insertToken: [] as (string | null)[],
   delete: [] as string[],
   createContainer: 0,
-  containerPasswords: [] as { obsWsPassword?: string; vncPassword?: string }[],
+  containerPasswords: [] as { obsWsPassword?: string; viewerPassword?: string }[],
   updates: [] as Record<string, unknown>[],
   lifecycle: [] as string[],
 };
@@ -80,9 +80,9 @@ mock.module("@/services/instances/twitch", () => ({
   },
 }));
 mock.module("@/clients/docker", () => ({
-  createContainer: async (opts: { obsWsPassword?: string; vncPassword?: string }) => {
+  createContainer: async (opts: { obsWsPassword?: string; viewerPassword?: string }) => {
     calls.createContainer++;
-    calls.containerPasswords.push({ obsWsPassword: opts.obsWsPassword, vncPassword: opts.vncPassword });
+    calls.containerPasswords.push({ obsWsPassword: opts.obsWsPassword, viewerPassword: opts.viewerPassword });
     return "container-1";
   },
   startContainer: async () => {},
@@ -92,7 +92,7 @@ mock.module("@/clients/docker", () => ({
   markApiStopping: () => {},
   clearApiStopping: () => {},
   stopContainer: async () => {},
-  NOVNC_PORT_INTERNAL: 6080,
+  SELKIES_PORT_INTERNAL: 8080,
   OBS_WS_PORT_INTERNAL: 4455,
 }));
 mock.module("@/clients/streamwizard-api/events", () => ({
@@ -120,7 +120,7 @@ mock.module("@/services/instances/instance-lifecycle", () => ({
   },
 }));
 
-// rest-api generates the VNC password at insert; the node reads it back.
+// rest-api generates the viewer password (vnc_password) at insert; the node reads it back.
 mock.module("@/services/cache/instance-secrets-cache", () => ({
   getInstanceSecrets: async () => {
     if (secretsError) throw secretsError;
@@ -199,9 +199,9 @@ test("sends the plaintext OBS password to rest-api and never any ciphertext", as
   expect(Object.keys(row).filter((k) => k.includes("ciphertext") || k.endsWith("_iv") || k.endsWith("_tag"))).toEqual([]);
 });
 
-test("boots the container with the VNC password rest-api generated", async () => {
+test("boots the container with the viewer password rest-api generated", async () => {
   await makeApp().request(createRequest());
-  expect(calls.containerPasswords).toEqual([{ obsWsPassword: "pw", vncPassword: "vnc-from-rest-api" }]);
+  expect(calls.containerPasswords).toEqual([{ obsWsPassword: "pw", viewerPassword: "vnc-from-rest-api" }]);
 });
 
 test("secrets call fails: 500, the instance is marked error, nothing boots", async () => {

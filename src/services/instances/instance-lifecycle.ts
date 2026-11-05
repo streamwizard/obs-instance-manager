@@ -77,7 +77,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
   // broadcast and before anything touches S3 or the config dir: a refusal
   // here leaves the instance exactly as it was, so other devices must not be
   // told it's coming up (there'd be no terminal "error"/"stopped" to clear it).
-  const { obs_ws_password: obsWsPassword, vnc_password: vncPassword } = await loadStartSecrets(instance);
+  const { obs_ws_password: obsWsPassword, vnc_password: viewerPassword } = await loadStartSecrets(instance);
   // Throws StreamKeyNotGrantedError when the user has not connected Twitch;
   // every caller (user start, admin start, auto-resume) already treats a
   // throw here as a failed start.
@@ -122,7 +122,7 @@ async function doRestartInstance(instance: Instance): Promise<Instance> {
       containerName: instance.container_name,
       resolution: instance.resolution,
       obsWsPassword,
-      vncPassword,
+      viewerPassword,
       memory_mb: instance.memory_mb,
       cpu_quota: instance.cpu_quota,
       shm_size: instance.shm_size,

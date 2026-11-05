@@ -90,7 +90,7 @@ mock.module("@/clients/docker", () => ({
   markApiStopping: () => {},
   clearApiStopping: () => {},
   stopContainer: async () => {},
-  NOVNC_PORT_INTERNAL: 6080,
+  SELKIES_PORT_INTERNAL: 8080,
   OBS_WS_PORT_INTERNAL: 4455,
 }));
 mock.module("@/clients/streamwizard-api/events", () => ({

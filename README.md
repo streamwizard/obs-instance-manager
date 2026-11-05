@@ -1,10 +1,10 @@
 # OBS Cloud Panel API
 
-REST API backend that manages OBS cloud containers on demand. Each container runs a headless OBS Studio instance (Xorg, NVIDIA GPU, x11vnc, noVNC) and is owned by a single StreamWizard user. The backend also streams per-container and host resource metrics in real time over SSE.
+REST API backend that manages OBS cloud containers on demand. Each container runs a headless OBS Studio instance (Xvfb, NVIDIA GPU, Selkies viewer) and is owned by a single StreamWizard user. The backend also streams per-container and host resource metrics in real time over SSE.
 
-Instance containers publish no ports to the host at all — noVNC and the OBS
-websocket are reached by proxying through this API itself
-(`/instances/:id/novnc`, `/instances/:id/obsws`) over a Docker-internal
+Instance containers publish no ports to the host at all — the Selkies viewer
+and the OBS websocket are reached by proxying through this API itself
+(`/instances/:id/selkies/`, `/instances/:id/obsws`) over a Docker-internal
 network. The only port a node exposes is the API's own (`3000`), bound to
 loopback and to the node's Tailscale address — never the LAN or a public
 interface. Browsers and the panel apps reach it through a Cloudflare Tunnel
@@ -133,18 +133,16 @@ GPU/VRAM metrics are unaffected by any of this — cAdvisor has no per-process G
 ## Running the whole stack on a dev box (WSL2 + Docker Desktop)
 
 Runs the manager against the local StreamWizard stack (local Supabase,
-rest-api, web panel) with instance containers that use the box's NVIDIA GPU.
-The viewer is noVNC, same as production. Production nodes are untouched:
-every new setting below defaults to the production value.
+rest-api, web panel) with instance containers that use the box's NVIDIA GPU
+directly. Every setting below defaults to the production value.
 
 WSL2 has no NVIDIA DRM driver, so the shared `gpu-xserver` (real Xorg +
 VirtualGL) cannot run. Instances get the GPU directly instead and OBS renders
-through Mesa's d3d12 driver (`/dev/dxg`) or in software; NVENC works as usual.
+through Mesa's d3d12 driver (`/dev/dxg`); NVENC works as usual. The Selkies
+viewer stream is CPU x264, as in production.
 
-1. Build the local instance image (it adds the `OBS_GL_MODE` entrypoint the
-   production image lacks) in the `obs-cloud-selkies` repo:
-   `docker compose build` (tags `obs-cloud-container-local:selkies`; only its
-   noVNC mode is used).
+1. Build the instance image in the `obs-cloud-selkies` repo:
+   `docker compose build` (tags `obs-cloud-container-local:selkies`).
 2. Start local Supabase and rest-api in the monorepo
    (`supabase start`, `cd apps/rest-api && bun run dev`).
 3. Link this box as a node and write `.env.local`:
@@ -157,6 +155,7 @@ through Mesa's d3d12 driver (`/dev/dxg`) or in software; NVENC works as usual.
 | `OBS_INSTANCE_IMAGE` | `ghcr.io/streamwizard/obs-cloud-container:latest` | `obs-cloud-container-local:selkies` | Instance image. |
 | `OBS_GPU_MODE` | `xserver` | `direct` | `xserver`: VirtualGL on `gpu-xserver`, bwrap jail. `direct`: GPU handed to the container, no jail privileges. |
 | `OBS_GL_MODE` | (n/a) | `d3d12` | Direct mode only: `d3d12` (WSL2 GPU, mounts `OBS_WSL_LIB_DIR`, default `/usr/lib/wsl`) or `software`. |
+| `SELKIES_*` | | | Forwarded to every instance's Selkies, overriding the defaults in `src/clients/instance-spec.ts`. `SELKIES_BASIC_AUTH_PASSWORD` is ignored: each instance gets its own. |
 | `ALLOW_MISSING_STREAM_KEY` | `false` | `true` | Boot without a Twitch stream key instead of refusing. Never on a real node. |
 
 ## Running without Docker Compose
@@ -227,7 +226,7 @@ All `/instances`, `/metrics` and `/admin` REST routes require `Authorization: Be
 
 A Supabase session JWT is not accepted: every call needs a node token.
 
-WebSocket upgrades (noVNC, obs-websocket, the admin metrics stream) can't send headers, so they use a 30-second single-use `?ticket=` from the matching `POST .../ws-ticket` route instead.
+WebSocket upgrades (obs-websocket, the admin metrics stream) can't send headers, so they use a 30-second single-use `?ticket=` from the matching `POST .../ws-ticket` route instead. The Selkies viewer carries its ticket in the URL fragment (see below).
 
 ### `GET /health`
 
@@ -251,16 +250,20 @@ WebSocket upgrades (noVNC, obs-websocket, the admin metrics stream) can't send h
 - **Behavior:** loads this node's config (`NODE_ID`), checks `max_instances` and `total_vram_mb` capacity, creates and starts the Docker container on the shared `obs-net` network (no host ports published), and persists the instance row.
 - **Response:** `201` with the full instance row. `409` if the node is at capacity or VRAM would be exceeded.
 
-### `GET /instances/:id/novnc`
-
-- **Auth:** required (`?token=` works here too, since browsers can't set headers on a WebSocket handshake)
-- **Behavior:** upgrades to a WebSocket and bridges it 1:1 to the instance container's internal noVNC websocket port (`6080`) over `obs-net`. This is the only way to reach noVNC — it's never published to the host.
-- Closes with code `4404` immediately after upgrading if the instance isn't found or isn't owned by the caller.
-
 ### `GET /instances/:id/obsws`
 
-- **Auth:** required (`?token=` supported)
-- **Behavior:** same bridge as above, to the instance's internal OBS websocket port (`4455`), for OBS Studio scene/source control.
+- **Auth:** a ws-ticket with scope `obsws` (`?ticket=`), minted by `POST /instances/:id/ws-ticket`
+- **Behavior:** upgrades to a WebSocket and bridges it 1:1 to the instance's internal OBS websocket port (`4455`) over `obs-net`, for OBS Studio scene/source control. It's never published to the host.
+- Closes with code `4404` immediately after upgrading if the instance isn't found or isn't owned by the caller.
+
+### `GET /instances/:id/selkies/`
+
+- **Auth:** a ws-ticket with scope `selkies` (2-minute TTL), minted by `POST /instances/:id/ws-ticket`, in the URL fragment: the panel opens `/instances/:id/selkies/#token=<ticket>` as its own window. Browsers never send the fragment to a server.
+- **Behavior:** everything under the prefix is proxied to the container's port `8080` over `obs-net`.
+  - Static client files (anything outside `/api/`, GET only) load without the ticket: they are the stock Selkies client.
+  - `/api/*` needs the ticket, which the Selkies client sends as `Authorization: Bearer` on fetches and as the `selkies.token.<base64url>` WebSocket subprotocol. The first use spends the ticket and opens a viewer session (`services/auth/selkies-viewer-sessions.ts`) that lives while a socket is open plus 2 minutes after the last one closes, capped at 12 hours. Every WebSocket connect checks instance ownership again (the admin role on the admin route), so revoked access ends with the socket. There is no cookie.
+  - Incoming cookies and `Authorization` are never forwarded; the proxy adds the instance's own Selkies basic auth (rest-api's per-instance `vnc_password`), so the browser never sees it.
+  - `/admin/instances/:id/selkies/` is the same for admins.
 
 ### `POST /instances/:id/start`
 

@@ -133,7 +133,7 @@ belt-and-braces: Docker-published ports bypass ufw, so the bind addresses
 are the real control.
 
 The loopback binding is for a Cloudflare Tunnel running on the node
-(`cloudflared` origin `http://localhost:3000`): that is how browsers (noVNC,
+(`cloudflared` origin `http://localhost:3000`): that is how browsers (the Selkies viewer,
 obs-websocket) and the panel apps reach the node, and it has no dependency
 on Tailscale being up. The admin sets the tunnel hostname as the node's
 `api_url`. The Tailscale binding is for tailnet hosts — the alert worker,
@@ -177,7 +177,7 @@ Because the ticket comes from the admin's own node token rather than a
 separate node-wide secret, an admin's browser can open this websocket
 **directly** — `ws://{api_url}/admin/metrics/stream?ticket={ticket}` —
 the same way an end user's browser connects directly to `/metrics/stream`,
-`/instances/:id/novnc`, and `/instances/:id/obsws`. No panel-side relay or
+`/instances/:id/selkies/`, and `/instances/:id/obsws`. No panel-side relay or
 node-wide credential is needed. `api_url` defaults to the node's tailnet
 address (`http://100.64.0.10:3000`, filled in at link time — see "Automated
 Tailscale join"), which only works from a machine on the tailnet. For
@@ -201,10 +201,9 @@ One concrete piece of that worth building early: a **deauthorize push**.
 Wings had a real vulnerability (CVE-2025-68954) where revoking a user's
 access didn't close their already-open sessions. The fix was a Panel→Wings
 `POST /api/deauthorize-user` call that force-closes that user's live
-connections immediately. We have the same exposure: a user's `/instances/:id/novnc`
-or `/instances/:id/obsws` websocket stays open until it closes, even if
-their access is revoked in the meantime (the ticket is only checked at the
-upgrade). The node-side fix
+connections immediately. We have the same exposure: a user's Selkies viewer or `/instances/:id/obsws`
+websocket stays open until it closes, even if their access is revoked in the
+meantime (ownership is only checked at each upgrade). The node-side fix
 is straightforward once there's a reason to add an authenticated
 node-control endpoint — track open proxy connections by `userId` in memory
 and expose a way to force-close them.
@@ -224,7 +223,7 @@ database.
 
 The per-instance VNC/noVNC/OBS-websocket port-range model is gone — instances
 are no longer published to the host at all, they're reached through
-obs-instance-manager's own websocket proxy (`/instances/:id/novnc`,
+obs-instance-manager's own proxy (`/instances/:id/selkies/`,
 `/instances/:id/obsws`) over a Docker-internal network. Run this migration
 (adjust name/timestamp to the repo's convention) against the existing
 `20260623000000_obs_instances.sql`:
@@ -269,8 +268,10 @@ alter table obs_instances
 headroom — and left `null` (unlimited) for Quadro/RTX-A nodes, which have no
 such cap. `vnc_password_*` mirrors the existing `obs_ws_password_*` columns'
 shape. rest-api generates and encrypts it when the node creates the row; the
-VNC password is purely an obs-net isolation measure (see entrypoint.sh's
-`x11vnc -rfbauth`) that the end user never needs to see.
+password is purely an obs-net isolation measure that the end user never
+needs to see. Despite the name it is now the Selkies viewer's basic-auth
+password: the manager passes it to the container and adds it as the
+Authorization header on its own proxy.
 
 The node never holds `TOKEN_ENCRYPTION_KEY` and never sees these encrypted
 columns. It sends the plaintext OBS WebSocket password on create and reads
