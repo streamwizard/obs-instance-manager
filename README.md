@@ -259,9 +259,10 @@ WebSocket upgrades (obs-websocket, the admin metrics stream) can't send headers,
 ### `GET /instances/:id/selkies/`
 
 - **Auth:** a ws-ticket with scope `selkies` (2-minute TTL), minted by `POST /instances/:id/ws-ticket`, in the URL fragment: the panel opens `/instances/:id/selkies/#token=<ticket>` as its own window. Browsers never send the fragment to a server.
-- **Behavior:** everything under the prefix is proxied to the container's port `8080` over `obs-net`.
-  - Static client files (anything outside `/api/`, GET only) load without the ticket: they are the stock Selkies client.
-  - `/api/*` needs the ticket, which the Selkies client sends as `Authorization: Bearer` on fetches and as the `selkies.token.<base64url>` WebSocket subprotocol. The first use spends the ticket and opens a viewer session (`services/auth/selkies-viewer-sessions.ts`) that lives while a socket is open plus 2 minutes after the last one closes, capped at 12 hours. Every WebSocket connect checks instance ownership again (the admin role on the admin route), so revoked access ends with the socket. There is no cookie.
+- **Behavior:**
+  - Static client files (anything outside `/api/`, GET or HEAD) load without the ticket. OIM serves them from its own copy of the Selkies web client, extracted from the Selkies release at image build time (`Dockerfile`, `VIEWER_WEB_ROOT`), never from the container. Keep `SELKIES_VERSION` in step with the instance image. The page answers `503` with a retrying "OBS is starting" page until Selkies in the container is healthy.
+  - `/api/*` and the WebSocket go to the container's port `8080` over `obs-net`. They need the ticket, which the Selkies client sends as `Authorization: Bearer` on fetches (or in its own `selkies_token` cookie where it can't set a header) and as the `selkies.token.<base64url>` WebSocket subprotocol. The first use spends the ticket and opens a viewer session (`services/auth/selkies-viewer-sessions.ts`) that lives while a socket is open plus 2 minutes after the last one closes, capped at 12 hours. Every WebSocket connect checks instance ownership again (the admin role on the admin route), so revoked access ends with the socket.
+  - HTTP answers from the container get `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff`, so they are never run as a page.
   - Incoming cookies and `Authorization` are never forwarded; the proxy adds the instance's own Selkies basic auth (rest-api's per-instance `vnc_password`), so the browser never sees it.
   - `/admin/instances/:id/selkies/` is the same for admins.
 
