@@ -824,8 +824,8 @@ with open(env_path, "w") as f:
     # in case the claim response doesn't happen to include it.
     f.write(f"GPU_BUSID={data.get('gpu_bus_id', gpu_bus_id_computed)}\n")
     f.write(f"S3_ENDPOINT={data['S3_ENDPOINT']}\n")
-    f.write(f"S3_ACCESS_KEY={data['S3_ACCESS_KEY']}\n")
-    f.write(f"S3_SECRET_KEY={data['S3_SECRET_KEY']}\n")
+    # No S3 keys: the node gets temporary, per-instance storage credentials
+    # from rest-api at runtime and keeps them in memory only.
     f.write(f"S3_BUCKET={data['S3_BUCKET']}\n")
     f.write(f"S3_REGION={data['S3_REGION']}\n")
     f.write("PORT=3000\n")
@@ -914,7 +914,7 @@ step "Start"
 # host would stop the traffic. Refusing to start is the only safe answer
 # until the node has actually joined Tailscale.
 MISSING_KEYS=""
-for key in NODE_ID NODE_API_KEY REST_API_URL GPU_BUSID S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET S3_REGION TAILSCALE_IP; do
+for key in NODE_ID NODE_API_KEY REST_API_URL GPU_BUSID S3_ENDPOINT S3_BUCKET S3_REGION TAILSCALE_IP; do
   grep -q "^${key}=.\+" "$ENV_FILE" || MISSING_KEYS="$MISSING_KEYS $key"
 done
 

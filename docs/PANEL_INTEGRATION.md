@@ -96,8 +96,7 @@ out that `NODE_ID`, along with the rest of the node's `.env`, during linking.
      "hostname": "gpu-box-1",
      "tailscale_authkey": "<single-use, tag:obs-node key, or null>",
      "rest_api_url": "https://api.example.com",
-     "S3_ENDPOINT": "...", "S3_ACCESS_KEY": "...", "S3_SECRET_KEY": "...",
-     "S3_BUCKET": "...", "S3_REGION": "..."
+     "S3_ENDPOINT": "...", "S3_BUCKET": "...", "S3_REGION": "..."
    }
    ```
 

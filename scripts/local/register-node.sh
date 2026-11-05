@@ -70,8 +70,6 @@ mkdir -p "$LOCAL_DATA_DIR/obs-configs" "$LOCAL_DATA_DIR/obs-plugins"
 sed -e "s|^NODE_ID=.*|NODE_ID=$(jq -r .node_id <<<"$RESP")|" \
     -e "s|^NODE_API_KEY=.*|NODE_API_KEY=$(jq -r .node_api_key <<<"$RESP")|" \
     -e "s|^S3_ENDPOINT=.*|S3_ENDPOINT=$(jq -r .S3_ENDPOINT <<<"$RESP")|" \
-    -e "s|^S3_ACCESS_KEY=.*|S3_ACCESS_KEY=$(jq -r .S3_ACCESS_KEY <<<"$RESP")|" \
-    -e "s|^S3_SECRET_KEY=.*|S3_SECRET_KEY=$(jq -r .S3_SECRET_KEY <<<"$RESP")|" \
     -e "s|^S3_BUCKET=.*|S3_BUCKET=$(jq -r .S3_BUCKET <<<"$RESP")|" \
     -e "s|^S3_REGION=.*|S3_REGION=$(jq -r .S3_REGION <<<"$RESP")|" \
     -e "s|^API_HOST_PORT=.*|API_HOST_PORT=$PORT|" \

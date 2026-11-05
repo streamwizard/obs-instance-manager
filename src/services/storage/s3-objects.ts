@@ -8,11 +8,14 @@ import {
 import { Upload } from "@aws-sdk/lib-storage";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { s3, S3_BUCKET } from "@/clients/s3";
+import { s3ForKey, S3_BUCKET } from "@/clients/s3";
 
 // Object-level helpers shared by the config/media sync (obs-config/) and the
 // plugin mirror (plugins.ts). Everything here streams: files are never held in
 // memory whole, except small ones where a single buffered PUT is cheaper.
+//
+// Each call signs with the credentials that cover its key (clients/s3.ts): an
+// instance's own folders, or the read-only shared ones.
 
 export interface S3ObjectInfo {
   key: string;
@@ -35,7 +38,7 @@ export async function listObjects(prefix: string): Promise<S3ObjectInfo[]> {
   let continuationToken: string | undefined;
 
   do {
-    const res = await s3.send(
+    const res = await s3ForKey(prefix).send(
       new ListObjectsV2Command({
         Bucket: S3_BUCKET,
         Prefix: prefix,
@@ -56,7 +59,7 @@ export async function listObjects(prefix: string): Promise<S3ObjectInfo[]> {
 // may have the old file mmapped (plugin .so files) or open. Returns false if
 // the object had no body.
 export async function downloadToFile(key: string, localPath: string): Promise<boolean> {
-  const res = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+  const res = await s3ForKey(key).send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
   if (!res.Body) return false;
 
   await mkdir(dirname(localPath), { recursive: true });
@@ -74,7 +77,7 @@ export async function downloadToFile(key: string, localPath: string): Promise<bo
 export async function uploadFile(key: string, localPath: string, size: number): Promise<void> {
   const file = Bun.file(localPath);
   if (size <= SINGLE_PUT_MAX_BYTES) {
-    await s3.send(
+    await s3ForKey(key).send(
       new PutObjectCommand({
         Bucket: S3_BUCKET,
         Key: key,
@@ -85,34 +88,46 @@ export async function uploadFile(key: string, localPath: string, size: number): 
   }
 
   await new Upload({
-    client: s3,
+    client: s3ForKey(key),
     params: { Bucket: S3_BUCKET, Key: key, Body: file.stream() },
     partSize: MULTIPART_PART_BYTES,
     queueSize: MULTIPART_QUEUE,
   }).done();
 }
 
-// Server-side copy, so a media rename doesn't re-upload the file.
+// Server-side copy, so a media rename doesn't re-upload the file. Both keys
+// are in the same instance's folder, so one set of credentials covers them.
 export async function copyObject(fromKey: string, toKey: string): Promise<void> {
   const source = `${S3_BUCKET}/${fromKey}`.split("/").map(encodeURIComponent).join("/");
-  await s3.send(new CopyObjectCommand({ Bucket: S3_BUCKET, Key: toKey, CopySource: source }));
+  await s3ForKey(toKey).send(new CopyObjectCommand({ Bucket: S3_BUCKET, Key: toKey, CopySource: source }));
 }
 
 // Batched delete. Returns the keys that were actually deleted; per-key
 // failures are left out (callers keep tracking them and retry next time).
-// A failed request for a whole batch throws.
+// A failed request for a whole batch throws. Keys are grouped by the
+// credentials that cover them, so each request signs with the right set.
 export async function deleteKeys(keys: string[]): Promise<string[]> {
+  const byClient = new Map<ReturnType<typeof s3ForKey>, string[]>();
+  for (const key of keys) {
+    const client = s3ForKey(key);
+    const group = byClient.get(client);
+    if (group) group.push(key);
+    else byClient.set(client, [key]);
+  }
+
   const deleted: string[] = [];
-  for (let i = 0; i < keys.length; i += DELETE_BATCH) {
-    const batch = keys.slice(i, i + DELETE_BATCH);
-    const res = await s3.send(
-      new DeleteObjectsCommand({
-        Bucket: S3_BUCKET,
-        Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
-      })
-    );
-    const failed = new Set((res.Errors ?? []).map((e) => e.Key));
-    deleted.push(...batch.filter((k) => !failed.has(k)));
+  for (const [client, group] of byClient) {
+    for (let i = 0; i < group.length; i += DELETE_BATCH) {
+      const batch = group.slice(i, i + DELETE_BATCH);
+      const res = await client.send(
+        new DeleteObjectsCommand({
+          Bucket: S3_BUCKET,
+          Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
+        })
+      );
+      const failed = new Set((res.Errors ?? []).map((e) => e.Key));
+      deleted.push(...batch.filter((k) => !failed.has(k)));
+    }
   }
   return deleted;
 }

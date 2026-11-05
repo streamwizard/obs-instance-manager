@@ -1,4 +1,5 @@
 import { clearApiStopping, markApiStopping, removeContainer, stopContainer } from "@/clients/docker";
+import { forgetInstanceStorage } from "@/clients/s3";
 import { deleteInstance } from "@/clients/streamwizard-api/instances";
 import { removeLocalConfig, removeS3Config } from "@/services/storage/obs-config";
 import { withInstanceLock } from "@/utils/instance-lock";
@@ -42,5 +43,6 @@ export async function destroyInstance(instance: Instance): Promise<void> {
 
     // rest-api tells the owner it was deleted (the row is gone after this).
     await deleteInstance(id);
+    forgetInstanceStorage(id);
   });
 }
