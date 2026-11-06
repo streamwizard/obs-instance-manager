@@ -179,6 +179,24 @@ function sessionEnded(): Response {
   return new Response(null, { status: 503, statusText: "Viewer session ended" });
 }
 
+interface EventTargetLike {
+  addEventListener(type: string, listener: (event: { stopImmediatePropagation(): void }) => void, options: { capture: boolean }): void;
+}
+
+/**
+ * Keeps `pointerrawupdate` from the client in a framed page. Chromium gives
+ * those events coordinates relative to the top-level window, not the frame,
+ * and Selkies sends hover motion from them (lib/input.js,
+ * _handleRawPointerUpdate), so the remote pointer sat lower than the visible
+ * one by the frame's offset (the app's header). Clicks come from mousedown
+ * and were right. Without raw updates Selkies sends motion from mousemove,
+ * which is frame-relative, as it does in Safari. Call before the client
+ * loads: the capture listener on window then runs ahead of its own.
+ */
+export function blockRawPointerUpdates(target: EventTargetLike): void {
+  target.addEventListener("pointerrawupdate", (event) => event.stopImmediatePropagation(), { capture: true });
+}
+
 export interface RelayEnv {
   /** window.__SW_PANEL_ORIGINS, as injected by OIM. */
   origins: unknown;

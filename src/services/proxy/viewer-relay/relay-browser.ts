@@ -2,7 +2,7 @@
 // script by viewer-page.ts. It runs in <head>, before the Selkies client
 // module, so its fetch wrapper is in place when the client's auth guard binds
 // window.fetch.
-import { createRelay, type CoreMessage, type ParentMessage, type RelayMessage } from "./relay";
+import { blockRawPointerUpdates, createRelay, type CoreMessage, type ParentMessage, type RelayMessage } from "./relay";
 
 // The few DOM members used here. OIM type-checks without the DOM lib.
 interface Target {
@@ -18,7 +18,11 @@ interface RelayWindow extends Target {
   location: { href: string; origin: string; pathname: string };
   fetch: Parameters<ReturnType<typeof createRelay>["wrapFetch"]>[0];
   __SW_PANEL_ORIGINS?: unknown;
-  addEventListener(type: string, listener: (event: { data: unknown; origin: string; source: unknown }) => void): void;
+  addEventListener(
+    type: string,
+    listener: (event: { data: unknown; origin: string; source: unknown; stopImmediatePropagation(): void }) => void,
+    options?: { capture: boolean },
+  ): void;
 }
 interface RelayDocument {
   body: { append(node: Element): void } | null;
@@ -59,4 +63,5 @@ const relay = createRelay({
 });
 
 win.fetch = relay.wrapFetch(win.fetch.bind(win));
+if (framed) blockRawPointerUpdates(win);
 win.addEventListener("message", (event) => relay.handleMessage(event));

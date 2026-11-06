@@ -223,7 +223,10 @@ works, without the app's controls. Messages:
 | app → client | `pipelineControl` | `pipeline: "audio"`, `enabled` (boolean) |
 
 Everything else is dropped in both directions, and the relay rebuilds each
-message from the fields above. The relay posts to the app with the app's
+message from the fields above. In a frame the relay also stops
+`pointerrawupdate` before Selkies sees it: Chromium gives those events
+top-window coordinates, so hover landed below the pointer by the frame's
+offset. Selkies then sends motion from `mousemove`, as in Safari. The relay posts to the app with the app's
 origin as the target, never `*`. Selkies' `stats` reply can't be relayed: the
 client posts it to `window.parent` with its own origin as the target.
 

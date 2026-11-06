@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  blockRawPointerUpdates,
   CLIPBOARD_TEXT_LIMIT,
   CORE_TO_PARENT_TYPES,
   createRelay,
@@ -297,5 +298,16 @@ describe("helpers", () => {
     expect(isReconnectProbe("GET", new URL(probeUrl), page())).toBe(true);
     expect(isReconnectProbe("POST", new URL(probeUrl), page())).toBe(false);
     expect(isReconnectProbe("GET", new URL(`${probeUrl}/x`), page())).toBe(false);
+  });
+});
+
+describe("blockRawPointerUpdates", () => {
+  test("stops pointerrawupdate before listeners added later, and nothing else", () => {
+    const target = new EventTarget();
+    blockRawPointerUpdates(target);
+    const seen: string[] = [];
+    for (const type of ["pointerrawupdate", "pointermove", "mousemove"]) target.addEventListener(type, () => seen.push(type));
+    for (const type of ["pointerrawupdate", "pointermove", "mousemove"]) target.dispatchEvent(new Event(type));
+    expect(seen).toEqual(["pointermove", "mousemove"]);
   });
 });
