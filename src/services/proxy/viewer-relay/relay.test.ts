@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUDIO_GRACE_MS,
   blockRawPointerUpdates,
+  createAudioWatch,
   CORE_TO_PARENT_TYPES,
   createRelay,
   isReconnectProbe,
@@ -294,5 +296,72 @@ describe("blockRawPointerUpdates", () => {
     for (const type of ["pointerrawupdate", "pointermove", "mousemove"]) target.addEventListener(type, () => seen.push(type));
     for (const type of ["pointerrawupdate", "pointermove", "mousemove"]) target.dispatchEvent(new Event(type));
     expect(seen).toEqual(["pointermove", "mousemove"]);
+  });
+});
+
+describe("audio", () => {
+  const types = (toParent: { message: unknown }[]) => toParent.map((p) => p.message);
+
+  test("forwards the audio verdict on change only, and replays it on pairing", () => {
+    const { relay, toParent, fromParent } = setup();
+    relay.setAudioBlocked(true);
+    fromParent({ type: "sw-hello" });
+    relay.setAudioBlocked(true);
+    relay.setAudioBlocked(false);
+    expect(types(toParent)).toEqual([
+      { type: "sw-ready", version: 1 },
+      { type: "audio-state", blocked: true },
+      { type: "audio-state", blocked: false },
+    ]);
+  });
+});
+
+describe("createAudioWatch", () => {
+  function fakeContext(state: string) {
+    const listeners: (() => void)[] = [];
+    const ctx = {
+      state,
+      addEventListener: (_type: "statechange", listener: () => void) => listeners.push(listener),
+      set(next: string) {
+        ctx.state = next;
+        for (const l of listeners) l();
+      },
+    };
+    return ctx;
+  }
+
+  function watch() {
+    const changes: boolean[] = [];
+    const timers: { fn: () => void; ms: number }[] = [];
+    const audio = createAudioWatch({ onChange: (b) => changes.push(b), schedule: (fn, ms) => timers.push({ fn, ms }) });
+    return { audio, changes, runTimers: () => timers.splice(0).forEach((t) => t.fn()), timers };
+  }
+
+  test("a context still suspended after the grace time is blocked", () => {
+    const { audio, changes, runTimers, timers } = watch();
+    audio.track(fakeContext("suspended"));
+    expect(changes).toEqual([]);
+    expect(timers[0]?.ms).toBe(AUDIO_GRACE_MS);
+    runTimers();
+    expect(changes).toEqual([true]);
+  });
+
+  test("a context that starts running is not blocked, and unblocks once it runs", () => {
+    const { audio, changes, runTimers } = watch();
+    const ctx = fakeContext("suspended");
+    audio.track(ctx);
+    runTimers();
+    ctx.set("running");
+    expect(changes).toEqual([true, false]);
+  });
+
+  test("a running context never reports blocked; a closed one is forgotten", () => {
+    const { audio, changes, runTimers } = watch();
+    const ctx = fakeContext("running");
+    audio.track(ctx);
+    runTimers();
+    expect(changes).toEqual([false]);
+    ctx.set("closed");
+    expect(changes).toEqual([false]);
   });
 });

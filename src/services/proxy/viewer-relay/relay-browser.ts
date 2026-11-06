@@ -2,7 +2,14 @@
 // script by viewer-page.ts. It runs in <head>, before the Selkies client
 // module, so its fetch wrapper is in place when the client's auth guard binds
 // window.fetch.
-import { blockRawPointerUpdates, createRelay, type CoreMessage, type ParentMessage, type RelayMessage } from "./relay";
+import {
+  blockRawPointerUpdates,
+  createAudioWatch,
+  createRelay,
+  type CoreMessage,
+  type ParentMessage,
+  type RelayMessage,
+} from "./relay";
 
 // The few DOM members used here. OIM type-checks without the DOM lib.
 interface Target {
@@ -18,12 +25,14 @@ interface RelayWindow extends Target {
   location: { href: string; origin: string; pathname: string };
   fetch: Parameters<ReturnType<typeof createRelay>["wrapFetch"]>[0];
   __SW_PANEL_ORIGINS?: unknown;
+  AudioContext?: AudioContextClass;
   addEventListener(
     type: string,
     listener: (event: { data: unknown; origin: string; source: unknown; stopImmediatePropagation(): void }) => void,
     options?: { capture: boolean },
   ): void;
 }
+type AudioContextClass = new (...args: never[]) => Parameters<ReturnType<typeof createAudioWatch>["track"]>[0];
 interface RelayDocument {
   body: { append(node: Element): void } | null;
   createElement(tag: string): Element;
@@ -61,6 +70,19 @@ const relay = createRelay({
   showEnded,
   warn: (text: string) => console.warn(text),
 });
+
+// Every AudioContext the client makes goes through this subclass, so the
+// watch sees the playback context the browser may hold suspended.
+const audio = createAudioWatch({ onChange: (blocked) => relay.setAudioBlocked(blocked) });
+const NativeAudioContext = win.AudioContext;
+if (typeof NativeAudioContext === "function") {
+  win.AudioContext = class extends NativeAudioContext {
+    constructor(...args: never[]) {
+      super(...args);
+      audio.track(this);
+    }
+  };
+}
 
 win.fetch = relay.wrapFetch(win.fetch.bind(win));
 if (framed) blockRawPointerUpdates(win);

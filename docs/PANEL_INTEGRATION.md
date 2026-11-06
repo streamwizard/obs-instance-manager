@@ -214,6 +214,7 @@ works, without the app's controls. Messages:
 |-----------|--------|--------|
 | relay → app | `sw-ready` | `version` (1). Followed by the last `pipelineStatusUpdate` the client sent. |
 | relay → app | `viewer-expired` | Sent once when the viewer session is dead. |
+| relay → app | `audio-state` | `blocked` (boolean). `true` while the browser's autoplay rule holds the sound back; only a click inside the frame lifts it, a click on the app's page doesn't. |
 | relay → app | `pipelineStatusUpdate` | `video?`, `audio?` (booleans) |
 | relay → app | `clientRoleUpdate` | `role`. Only sent in Selkies' secure mode, which instances don't run. |
 | app → client | `setMute` | `value` (boolean) |

@@ -46,7 +46,10 @@ export type ParentMessage =
   | { type: "pipelineStatusUpdate"; video?: boolean; audio?: boolean }
   | { type: "clientRoleUpdate"; role: string };
 
-export type RelayMessage = { type: "sw-ready"; version: number } | { type: "viewer-expired" };
+export type RelayMessage =
+  | { type: "sw-ready"; version: number }
+  | { type: "viewer-expired" }
+  | { type: "audio-state"; blocked: boolean };
 
 type Fields = Record<string, unknown>;
 
@@ -76,6 +79,7 @@ export function pairableOrigins(raw: unknown): string[] | null {
 export function isHello(data: unknown): boolean {
   return asObject(data)?.type === "sw-hello";
 }
+
 
 /** A parent message the client accepts, rebuilt from its known fields, or null. */
 export function toCoreMessage(data: unknown): CoreMessage | null {
@@ -181,6 +185,52 @@ export function blockRawPointerUpdates(target: EventTargetLike): void {
   target.addEventListener("pointerrawupdate", (event) => event.stopImmediatePropagation(), { capture: true });
 }
 
+interface AudioContextLike {
+  readonly state: string;
+  addEventListener(type: "statechange", listener: () => void): void;
+}
+
+/** How long a new AudioContext may stay suspended before it counts as blocked. */
+export const AUDIO_GRACE_MS = 1_500;
+
+/**
+ * Watches the client's AudioContexts for the browser's autoplay block.
+ * Selkies never suspends one itself and retries resume() on every audio
+ * packet, so a context still suspended after AUDIO_GRACE_MS is one the
+ * browser refuses until the page gets a click. Reports changes only.
+ *
+ * There is no "resume" for the parent to call: browsers don't pass a click on
+ * the parent page into the frame (checked in Chromium, also with
+ * allow="autoplay"), so only a click inside the frame starts the sound.
+ */
+export function createAudioWatch({
+  onChange,
+  schedule = (fn: () => void, ms: number) => void setTimeout(fn, ms),
+}: {
+  onChange: (blocked: boolean) => void;
+  schedule?: (fn: () => void, ms: number) => void;
+}) {
+  const contexts = new Set<AudioContextLike>();
+  let blocked: boolean | null = null;
+
+  function evaluate() {
+    for (const ctx of contexts) if (ctx.state === "closed") contexts.delete(ctx);
+    // Safari's "interrupted" holds the sound back the same way.
+    const now = [...contexts].some((ctx) => ctx.state === "suspended" || ctx.state === "interrupted");
+    if (now === blocked) return;
+    blocked = now;
+    onChange(now);
+  }
+
+  return {
+    track(ctx: AudioContextLike) {
+      contexts.add(ctx);
+      ctx.addEventListener("statechange", evaluate);
+      schedule(evaluate, AUDIO_GRACE_MS);
+    },
+  };
+}
+
 export interface RelayEnv {
   /** window.__SW_PANEL_ORIGINS, as injected by OIM. */
   origins: unknown;
@@ -211,6 +261,7 @@ export function createRelay(env: RelayEnv) {
   // after the socket is already up.
   let pipeline: Extract<ParentMessage, { type: "pipelineStatusUpdate" }> | null = null;
   let role: ParentMessage | null = null;
+  let audioBlocked: boolean | null = null;
 
   function toParent(message: ParentMessage | RelayMessage) {
     if (paired) env.postToParent(paired.source, message, paired.origin);
@@ -231,6 +282,7 @@ export function createRelay(env: RelayEnv) {
     else {
       if (pipeline) toParent(pipeline);
       if (role) toParent(role);
+      if (audioBlocked !== null) toParent({ type: "audio-state", blocked: audioBlocked });
     }
   }
 
@@ -259,6 +311,13 @@ export function createRelay(env: RelayEnv) {
       if (message.type === "pipelineStatusUpdate") pipeline = { ...pipeline, ...message };
       if (message.type === "clientRoleUpdate") role = message;
       if (!expired) toParent(message);
+    },
+
+    /** The audio watch's verdict, forwarded to the parent when it changes. */
+    setAudioBlocked(blocked: boolean) {
+      if (blocked === audioBlocked) return;
+      audioBlocked = blocked;
+      if (!expired) toParent({ type: "audio-state", blocked });
     },
 
     /**
