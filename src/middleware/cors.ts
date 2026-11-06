@@ -1,7 +1,6 @@
 import { cors } from "hono/cors";
 import { debug } from "@/utils/logger";
-
-const allowedOrigins = (process.env.PANEL_ORIGIN ?? "*").split(",");
+import { PANEL_ORIGINS as allowedOrigins } from "@/utils/panel-origins";
 
 // REST routes (not the WebSocket upgrades) are called directly from the
 // panel's browser with an Authorization header, which triggers a CORS
