@@ -6,7 +6,10 @@
 // own origin, so the relay pairs with the parent, re-posts an allowlisted set
 // of its messages to its own window, and forwards a few of the client's status
 // messages back. Nothing else crosses: the parent can't switch streaming
-// modes, send input or read settings, and gets plain data only.
+// modes, send input or read settings, and gets plain data only. Clipboard
+// text doesn't cross either: Selkies syncs it itself inside the frame
+// (Ctrl+C / Ctrl+V), with the clipboard permissions the frame's allow
+// attribute delegates.
 //
 // It also watches the client's fetches for a dead viewer session (2 minutes
 // without a socket, or the 12-hour cap; services/auth/selkies-viewer-sessions)
@@ -21,13 +24,10 @@
 
 export const RELAY_VERSION = 1;
 
-// Longest clipboard text that crosses in either direction. Selkies itself caps
-// its clipboard preview at 256 KiB (lib/clipboard-sync.js).
-export const CLIPBOARD_TEXT_LIMIT = 256 * 1024;
 const ROLE_LIMIT = 32;
 
 /** Parent -> client messages the relay passes on, after rebuilding them. */
-export const PARENT_TO_CORE_TYPES = ["setMute", "setVolume", "clipboardUpdateFromUI", "pipelineControl"] as const;
+export const PARENT_TO_CORE_TYPES = ["setMute", "setVolume", "pipelineControl"] as const;
 /**
  * Client -> parent messages the relay forwards. Disjoint from the list above,
  * so a message the relay re-posts to its own window never echoes back out.
@@ -35,17 +35,15 @@ export const PARENT_TO_CORE_TYPES = ["setMute", "setVolume", "clipboardUpdateFro
  * window.parent with its own origin as the target, which the browser drops
  * for a cross-origin parent.
  */
-export const CORE_TO_PARENT_TYPES = ["pipelineStatusUpdate", "clipboardContentUpdate", "clientRoleUpdate"] as const;
+export const CORE_TO_PARENT_TYPES = ["pipelineStatusUpdate", "clientRoleUpdate"] as const;
 
 export type CoreMessage =
   | { type: "setMute"; value: boolean }
   | { type: "setVolume"; value: number }
-  | { type: "clipboardUpdateFromUI"; text: string }
   | { type: "pipelineControl"; pipeline: "audio"; enabled: boolean };
 
 export type ParentMessage =
   | { type: "pipelineStatusUpdate"; video?: boolean; audio?: boolean }
-  | { type: "clipboardContentUpdate"; text: string; truncated: boolean; secret: boolean }
   | { type: "clientRoleUpdate"; role: string };
 
 export type RelayMessage = { type: "sw-ready"; version: number } | { type: "viewer-expired" };
@@ -90,10 +88,6 @@ export function toCoreMessage(data: unknown): CoreMessage | null {
       return typeof m.value === "number" && Number.isFinite(m.value)
         ? { type: "setVolume", value: Math.min(1, Math.max(0, m.value)) }
         : null;
-    case "clipboardUpdateFromUI":
-      return typeof m.text === "string" && m.text.length <= CLIPBOARD_TEXT_LIMIT
-        ? { type: "clipboardUpdateFromUI", text: m.text }
-        : null;
     case "pipelineControl":
       // Audio only: the parent mutes the stream, it never stops the picture.
       return m.pipeline === "audio" && typeof m.enabled === "boolean"
@@ -114,16 +108,6 @@ export function toParentMessage(data: unknown): ParentMessage | null {
       if (typeof m.video === "boolean") out.video = m.video;
       if (typeof m.audio === "boolean") out.audio = m.audio;
       return out.video === undefined && out.audio === undefined ? null : out;
-    }
-    case "clipboardContentUpdate": {
-      if (typeof m.text !== "string") return null;
-      const cut = m.text.length > CLIPBOARD_TEXT_LIMIT;
-      return {
-        type: "clipboardContentUpdate",
-        text: cut ? m.text.slice(0, CLIPBOARD_TEXT_LIMIT) : m.text,
-        truncated: cut || m.truncated === true,
-        secret: m.secret === true,
-      };
     }
     case "clientRoleUpdate":
       return typeof m.role === "string" && m.role.length > 0 && m.role.length <= ROLE_LIMIT

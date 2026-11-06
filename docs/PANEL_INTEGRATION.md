@@ -215,15 +215,14 @@ works, without the app's controls. Messages:
 | relay → app | `sw-ready` | `version` (1). Followed by the last `pipelineStatusUpdate` the client sent. |
 | relay → app | `viewer-expired` | Sent once when the viewer session is dead. |
 | relay → app | `pipelineStatusUpdate` | `video?`, `audio?` (booleans) |
-| relay → app | `clipboardContentUpdate` | `text` (at most 256 KiB), `truncated`, `secret` |
 | relay → app | `clientRoleUpdate` | `role`. Only sent in Selkies' secure mode, which instances don't run. |
 | app → client | `setMute` | `value` (boolean) |
 | app → client | `setVolume` | `value` (0 to 1) |
-| app → client | `clipboardUpdateFromUI` | `text` (at most 256 KiB) |
 | app → client | `pipelineControl` | `pipeline: "audio"`, `enabled` (boolean) |
 
-Everything else is dropped in both directions, and the relay rebuilds each
-message from the fields above. In a frame the relay also stops
+Everything else is dropped in both directions, clipboard text included
+(Selkies syncs the clipboard itself inside the frame, with Ctrl+C and
+Ctrl+V), and the relay rebuilds each message from the fields above. In a frame the relay also stops
 `pointerrawupdate` before Selkies sees it: Chromium gives those events
 top-window coordinates, so hover landed below the pointer by the frame's
 offset. Selkies then sends motion from `mousemove`, as in Safari. The relay posts to the app with the app's

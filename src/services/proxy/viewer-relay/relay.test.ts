@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   blockRawPointerUpdates,
-  CLIPBOARD_TEXT_LIMIT,
   CORE_TO_PARENT_TYPES,
   createRelay,
   isReconnectProbe,
@@ -76,7 +75,6 @@ describe("message allowlists", () => {
     expect(toCoreMessage({ type: "setMute", value: true, extra: "<b>" })).toEqual({ type: "setMute", value: true });
     expect(toCoreMessage({ type: "setVolume", value: 3 })).toEqual({ type: "setVolume", value: 1 });
     expect(toCoreMessage({ type: "setVolume", value: -1 })).toEqual({ type: "setVolume", value: 0 });
-    expect(toCoreMessage({ type: "clipboardUpdateFromUI", text: "hi" })).toEqual({ type: "clipboardUpdateFromUI", text: "hi" });
     expect(toCoreMessage({ type: "pipelineControl", pipeline: "audio", enabled: false })).toEqual({
       type: "pipelineControl",
       pipeline: "audio",
@@ -95,8 +93,7 @@ describe("message allowlists", () => {
       { type: "getStats" },
       { type: "setMute", value: "true" },
       { type: "setVolume", value: Number.NaN },
-      { type: "clipboardUpdateFromUI", text: 1 },
-      { type: "clipboardUpdateFromUI", text: "x".repeat(CLIPBOARD_TEXT_LIMIT + 1) },
+      { type: "clipboardUpdateFromUI", text: "hi" },
       { type: "pipelineControl", pipeline: "video", enabled: false },
       { type: "pipelineControl", pipeline: "microphone", enabled: true },
     ]) {
@@ -111,18 +108,6 @@ describe("message allowlists", () => {
       audio: false,
     });
     expect(toParentMessage({ type: "clientRoleUpdate", role: "controller" })).toEqual({ type: "clientRoleUpdate", role: "controller" });
-    expect(toParentMessage({ type: "clipboardContentUpdate", text: "copied", totalLength: 6, secret: false })).toEqual({
-      type: "clipboardContentUpdate",
-      text: "copied",
-      truncated: false,
-      secret: false,
-    });
-  });
-
-  test("long clipboard text is cut and marked truncated", () => {
-    const message = toParentMessage({ type: "clipboardContentUpdate", text: "x".repeat(CLIPBOARD_TEXT_LIMIT + 10) });
-    expect(message).toMatchObject({ truncated: true });
-    expect(message?.type === "clipboardContentUpdate" && message.text.length).toBe(CLIPBOARD_TEXT_LIMIT);
   });
 
   test("other client messages stay on the node", () => {
@@ -131,7 +116,7 @@ describe("message allowlists", () => {
       { type: "stats", data: {} },
       { type: "fileUpload", payload: {} },
       { type: "pipelineStatusUpdate", microphone: true },
-      { type: "clipboardContentUpdate", text: { html: "<img>" } },
+      { type: "clipboardContentUpdate", text: "copied", truncated: false, secret: false },
       { type: "clientRoleUpdate", role: "x".repeat(33) },
     ]) {
       expect(toParentMessage(bad)).toBeNull();
