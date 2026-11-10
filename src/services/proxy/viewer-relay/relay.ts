@@ -27,7 +27,7 @@ export const RELAY_VERSION = 1;
 const ROLE_LIMIT = 32;
 
 /** Parent -> client messages the relay passes on, after rebuilding them. */
-export const PARENT_TO_CORE_TYPES = ["setMute", "setVolume", "pipelineControl"] as const;
+export const PARENT_TO_CORE_TYPES = ["setMute", "setVolume", "pipelineControl", "setScaleLocally"] as const;
 /**
  * Client -> parent messages the relay forwards. Disjoint from the list above,
  * so a message the relay re-posts to its own window never echoes back out.
@@ -40,7 +40,10 @@ export const CORE_TO_PARENT_TYPES = ["pipelineStatusUpdate", "clientRoleUpdate"]
 export type CoreMessage =
   | { type: "setMute"; value: boolean }
   | { type: "setVolume"; value: number }
-  | { type: "pipelineControl"; pipeline: "audio"; enabled: boolean };
+  | { type: "pipelineControl"; pipeline: "audio"; enabled: boolean }
+  // false draws the desktop at one pixel per screen pixel instead of
+  // stretching it to the frame, so text stays sharp on bigger screens.
+  | { type: "setScaleLocally"; value: boolean };
 
 export type ParentMessage =
   | { type: "pipelineStatusUpdate"; video?: boolean; audio?: boolean }
@@ -97,6 +100,8 @@ export function toCoreMessage(data: unknown): CoreMessage | null {
       return m.pipeline === "audio" && typeof m.enabled === "boolean"
         ? { type: "pipelineControl", pipeline: "audio", enabled: m.enabled }
         : null;
+    case "setScaleLocally":
+      return typeof m.value === "boolean" ? { type: "setScaleLocally", value: m.value } : null;
     default:
       return null;
   }

@@ -82,6 +82,7 @@ describe("message allowlists", () => {
       pipeline: "audio",
       enabled: false,
     });
+    expect(toCoreMessage({ type: "setScaleLocally", value: false })).toEqual({ type: "setScaleLocally", value: false });
   });
 
   test("parent messages outside the allowlist or with bad fields are dropped", () => {
@@ -95,6 +96,8 @@ describe("message allowlists", () => {
       { type: "getStats" },
       { type: "setMute", value: "true" },
       { type: "setVolume", value: Number.NaN },
+      { type: "setScaleLocally", value: "false" },
+      { type: "setScaleLocally" },
       { type: "clipboardUpdateFromUI", text: "hi" },
       { type: "pipelineControl", pipeline: "video", enabled: false },
       { type: "pipelineControl", pipeline: "microphone", enabled: true },

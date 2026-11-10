@@ -220,6 +220,7 @@ works, without the app's controls. Messages:
 | app → client | `setMute` | `value` (boolean) |
 | app → client | `setVolume` | `value` (0 to 1) |
 | app → client | `pipelineControl` | `pipeline: "audio"`, `enabled` (boolean) |
+| app → client | `setScaleLocally` | `value` (boolean). `true` stretches the desktop to the frame, `false` shows it at one desktop pixel per screen pixel, centred (sharper, cut off when the frame is smaller). The client remembers the last value per node. |
 
 Everything else is dropped in both directions, clipboard text included
 (Selkies syncs the clipboard itself inside the frame, with Ctrl+C and
