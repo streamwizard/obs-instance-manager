@@ -218,7 +218,7 @@ The server listens on `PORT` (default `3000`) and logs the port on startup.
 | `OBS_IMAGE_TAG` | Read by `docker-compose.yml`, not the app. Blank tracks `:latest`; set to `sha-<short>` to pin the node to a specific build |
 | `CADVISOR_URL` | Base URL of the cAdvisor instance used for container CPU/RAM metrics (default `http://localhost:8080`) |
 | `OBS_NETWORK` | Docker network shared with instance containers for the websocket proxy (default `obs-net`) |
-| `PANEL_ORIGIN` | Comma-separated origin(s) allowed to call the REST API directly from a browser (CORS). Default `*` |
+| `PANEL_ORIGIN` | Comma-separated origin(s) of the StreamWizard apps that call this node from a browser, e.g. `https://streamwizard.org,https://admin.streamwizard.org`. Used for CORS, and as the only origins that may frame the Selkies viewer and pair with its relay. Default `*`: CORS stays open, but the viewer relay refuses to pair, so the apps show the viewer without their controls. Set it on every node |
 
 ## API reference
 
@@ -258,9 +258,10 @@ WebSocket upgrades (obs-websocket, the admin metrics stream) can't send headers,
 
 ### `GET /instances/:id/selkies/`
 
-- **Auth:** a ws-ticket with scope `selkies` (2-minute TTL), minted by `POST /instances/:id/ws-ticket`, in the URL fragment: the panel opens `/instances/:id/selkies/#token=<ticket>` as its own window. Browsers never send the fragment to a server.
+- **Auth:** a ws-ticket with scope `selkies` (2-minute TTL), minted by `POST /instances/:id/ws-ticket`, in the URL fragment: the panel frames `/instances/:id/selkies/#token=<ticket>` in an `<iframe>` on its own viewer page. Browsers never send the fragment to a server.
 - **Behavior:**
-  - Static client files (anything outside `/api/`, GET or HEAD) load without the ticket. OIM serves them from its own copy of the Selkies web client, extracted from the Selkies release at image build time (`Dockerfile`, `VIEWER_WEB_ROOT`), never from the container. Keep `SELKIES_VERSION` in step with the instance image. The page answers `503` with a retrying "OBS is starting" page until Selkies in the container is healthy.
+  - Static client files (anything outside `/api/`, GET or HEAD) load without the ticket. OIM serves them from its own copy of the Selkies web client, extracted from the Selkies release at image build time (`Dockerfile`, `VIEWER_WEB_ROOT`), never from the container. Keep `SELKIES_VERSION` in step with the instance image.
+  - The page itself (`/`) is OIM's own entry page (`services/proxy/viewer-relay/`), not the one in the Selkies release: the Selkies core client without its dashboard, plus a relay script (`sw-relay.js`) for the app that frames it. It answers `503` with a retrying "OBS is starting" page until Selkies in the container is healthy; panels probe it with `HEAD` (no ticket) and mint only once it answers `200`. When `PANEL_ORIGIN` names origins, only those may frame it (`frame-ancestors`). See [the relay protocol](docs/PANEL_INTEGRATION.md#selkies-viewer-in-a-panel-frame).
   - `/api/*` and the WebSocket go to the container's port `8080` over `obs-net`. They need the ticket, which the Selkies client sends as `Authorization: Bearer` on fetches (or in its own `selkies_token` cookie where it can't set a header) and as the `selkies.token.<base64url>` WebSocket subprotocol. The first use spends the ticket and opens a viewer session (`services/auth/selkies-viewer-sessions.ts`) that lives while a socket is open plus 2 minutes after the last one closes, capped at 12 hours. Every WebSocket connect checks instance ownership again (the admin role on the admin route), so revoked access ends with the socket.
   - HTTP answers from the container get `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff`, so they are never run as a page.
   - Incoming cookies and `Authorization` are never forwarded; the proxy adds the instance's own Selkies basic auth (rest-api's per-instance `vnc_password`), so the browser never sees it.

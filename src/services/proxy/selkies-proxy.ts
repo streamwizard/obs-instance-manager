@@ -7,6 +7,7 @@ import { getInstanceSecrets } from "@/services/cache/instance-secrets-cache";
 import { containerNameForInstance } from "@/utils/container-name";
 import { isStaticPath, tokenFromBearer, tokenFromCookie, tokenFromProtocols } from "@/services/proxy/selkies-request";
 import { clientFileResponse, hardenUpstreamHeaders, selkiesWebRoot } from "@/services/proxy/selkies-client-files";
+import { RELAY_SCRIPT_PATH, relayScriptResponse, viewerPageResponse } from "@/services/proxy/viewer-relay/viewer-page";
 import { MessageRateLimiter } from "@/utils/rate-limit";
 import { debug, log } from "@/utils/logger";
 
@@ -23,7 +24,9 @@ import { debug, log } from "@/utils/logger";
 // - Static client files (HTML, JS, CSS, codecs) load without it. OIM serves
 //   them from its own copy of the Selkies client (selkies-client-files.ts),
 //   never from the container, so nothing running inside an instance can put
-//   a page of its own on this origin. They hold nothing per user.
+//   a page of its own on this origin. They hold nothing per user. The entry
+//   page itself is OIM's (viewer-relay/viewer-page.ts): the Selkies client
+//   plus a relay for the StreamWizard app that frames it.
 // - Everything under /api/ needs the ticket: the client sends it as
 //   "Authorization: Bearer" on fetches (or its own "selkies_token" cookie
 //   where it can't set a header) and as the "selkies.token.<b64url>"
@@ -262,9 +265,10 @@ export function selkiesProxy(getInstance: GetInstance, webRoot = selkiesWebRoot(
     if (!isUpgrade && isStaticPath(rest)) {
       if (c.req.method !== "GET" && c.req.method !== "HEAD") return c.text("Method not allowed", 405);
       if (rest === "/") {
-        // The panel opens the viewer as soon as the instance row says
-        // running, which is before Selkies inside it listens. Keep the page
-        // retrying (the refresh keeps the #token fragment) until it does.
+        // An instance row says running before Selkies inside it listens.
+        // The panel probes this (HEAD, no ticket) until it answers 200 and
+        // only then mints; a page opened earlier keeps retrying (the refresh
+        // keeps the #token fragment) until it does.
         let ready = false;
         try {
           ready = await upstreamReady(ownContainer, await upstreamAuthorization(id));
@@ -272,7 +276,9 @@ export function selkiesProxy(getInstance: GetInstance, webRoot = selkiesWebRoot(
           log("warn", "selkies proxy could not load the instance's viewer password", { id, error: (err as Error).message });
         }
         if (!ready) return c.html(STARTING_PAGE, 503, { "Retry-After": "2" });
+        return viewerPageResponse(c.req.method);
       }
+      if (rest === RELAY_SCRIPT_PATH) return relayScriptResponse(c.req.method);
       const file = await clientFileResponse(webRoot, rest, c.req.method);
       return file ?? c.text("Not found", 404);
     }
@@ -283,6 +289,12 @@ export function selkiesProxy(getInstance: GetInstance, webRoot = selkiesWebRoot(
     const session = token ? await sessionFor(token, id, isUpgrade) : null;
     if (!session) {
       debug("http", `${id}:selkies request rejected (${token ? "expired or not yours" : "no token"})`);
+      // A dead ticket on the WebSocket gets a plain HTTP 401, not an accepted
+      // socket closed with 4001 "Invalid token". The 4001 would stop the
+      // client cleanly, but it also skips the reconnect probe (GET
+      // .../api/websockets) whose 401 the viewer relay (viewer-relay/relay.ts)
+      // watches to tell the framing app to mint a new ticket. Refusing the
+      // upgrade also costs no socket for a request that can't succeed.
       if (isUpgrade) return c.text("Viewer link expired, reopen the viewer", 401);
       return c.json({ error: "Viewer link expired, reopen the viewer" }, 401);
     }

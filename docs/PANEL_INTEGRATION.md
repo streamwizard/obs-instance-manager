@@ -185,6 +185,67 @@ browsers, the admin overrides `api_url` with the node's Cloudflare Tunnel
 hostname in the panel UI (the tunnel's origin is the loopback binding,
 `http://localhost:3000`) — it's just "where do I reach this node's API".
 
+## Selkies viewer in a panel frame
+
+The apps (web-streamwizard `/obs-viewer`, web-admin `/obs-desktop`) show an
+instance's Selkies viewer in a cross-origin `<iframe>` and draw their own
+header and controls around it. Nothing from the container runs on an app's
+origin: the Selkies client stays on the node's origin, which holds nothing
+but a spent ticket.
+
+**Opening it**
+
+1. `HEAD {api_url}/instances/:id/selkies/` (admins: `/admin/instances/...`)
+   until it answers `200`. It needs no ticket; `503` means OBS is still
+   starting.
+2. Mint a ticket (`POST .../ws-ticket` with `{ "scope": "selkies" }`) and
+   set the frame's `src` to `.../selkies/#token=<ticket>`, with
+   `allow="clipboard-read; clipboard-write; autoplay; fullscreen"`. No
+   `sandbox`: Selkies needs scripts and its own origin.
+3. On every frame `load`, post `{ type: "sw-hello" }` to the node's origin.
+
+**The relay** (`services/proxy/viewer-relay/relay.ts`) pairs only with a
+`sw-hello` from the frame's direct parent whose origin is in `PANEL_ORIGIN`
+(injected into the page on each request, never fetched). With
+`PANEL_ORIGIN=*` or unset it refuses to pair and logs once; the viewer still
+works, without the app's controls. Messages:
+
+| Direction | `type` | Fields |
+|-----------|--------|--------|
+| relay → app | `sw-ready` | `version` (1). Followed by the last `pipelineStatusUpdate` the client sent. |
+| relay → app | `viewer-expired` | Sent once when the viewer session is dead. |
+| relay → app | `audio-state` | `blocked` (boolean). `true` while the browser's autoplay rule holds the sound back; only a click inside the frame lifts it, a click on the app's page doesn't. |
+| relay → app | `pipelineStatusUpdate` | `video?`, `audio?` (booleans) |
+| relay → app | `clientRoleUpdate` | `role`. Only sent in Selkies' secure mode, which instances don't run. |
+| app → client | `setMute` | `value` (boolean) |
+| app → client | `setVolume` | `value` (0 to 1) |
+| app → client | `pipelineControl` | `pipeline: "audio"`, `enabled` (boolean) |
+| app → client | `setScaleLocally` | `value` (boolean). `true` stretches the desktop to the frame, `false` shows it at one desktop pixel per screen pixel, centred (sharper, cut off when the frame is smaller). The client remembers the last value per node. |
+
+Everything else is dropped in both directions, clipboard text included
+(Selkies syncs the clipboard itself inside the frame, with Ctrl+C and
+Ctrl+V), and the relay rebuilds each message from the fields above. In a frame the relay also stops
+`pointerrawupdate` before Selkies sees it: Chromium gives those events
+top-window coordinates, so hover landed below the pointer by the frame's
+offset. Selkies then sends motion from `mousemove`, as in Safari. The relay posts to the app with the app's
+origin as the target, never `*`. Selkies' `stats` reply can't be relayed: the
+client posts it to `window.parent` with its own origin as the target.
+
+**Expiry.** The viewer session dies 2 minutes after the last socket closes, or
+after 12 hours. The Selkies client then probes `GET .../api/websockets`, which
+answers `401`; the relay catches that, posts `viewer-expired` and from then
+on answers the client's API calls with `503` itself, so the client stops
+reloading the page. The app mints a new ticket and loads a **new frame** with
+it. Changing only the `#token` of the same frame is not enough: the client
+reads the token for its socket once per page load.
+
+A dead ticket on the WebSocket upgrade keeps getting HTTP `401` rather than an
+accepted socket closed with `4001`: the `4001` would stop the client, but it
+also skips the probe the relay watches.
+
+Opened at the top level (no frame), the page shows "Viewer session ended.
+Reopen it from your dashboard." on expiry instead of looping.
+
 ## Target architecture: nodes hold no real state
 
 Pterodactyl Wings' core design principle is worth adopting wholesale here:
